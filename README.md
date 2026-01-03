@@ -1,5 +1,5 @@
 # Tasks-calendar
-Obsidian plugin: Calendar for the tasks plugin
+Obsidian plugin: Calendar for the ["Tasks"](https://github.com/obsidian-tasks-group/obsidian-tasks) plugin
 
 # Screensots
 
