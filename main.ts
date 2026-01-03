@@ -1,4 +1,4 @@
-import { Plugin } from 'obsidian';
+import { Plugin, View } from 'obsidian';
 import { TasksCalendarSettings, DEFAULT_SETTINGS, TasksCalendarSettingTab } from './src/settings';
 import { t } from './src/locales';
 import { TasksCalendarView } from './src/views/TasksCalendarView';
@@ -13,7 +13,7 @@ export default class TasksCalendarPlugin extends Plugin {
 
 		this.registerView(
 			'tasks-calendar-view',
-			(leaf) => new TasksCalendarView(leaf, this)
+			(leaf) => new TasksCalendarView(leaf, this) as unknown as View
 		);
 
 		this.addCommand({

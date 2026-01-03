@@ -129,18 +129,32 @@ const props = defineProps<{
 const tasksRef = ref<HTMLElement | null>(null);
 const currentDate = ref(moment());
 const tasksByDate = ref<Record<string, boolean>>({});
-const weekDays = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 const isLoading = ref(false);
 const selectedDate = ref<string>('');
 
-const monthYearLabel = computed(() => {
-	const monthNames = [
-		'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
-		'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'
+const weekDays = computed(() => {
+	const lang = props.plugin.settings.language || 'en';
+	return [
+		t(lang, 'weekDayMon'),
+		t(lang, 'weekDayTue'),
+		t(lang, 'weekDayWed'),
+		t(lang, 'weekDayThu'),
+		t(lang, 'weekDayFri'),
+		t(lang, 'weekDaySat'),
+		t(lang, 'weekDaySun'),
 	];
-	const month = monthNames[currentDate.value.month()];
+});
+
+const monthYearLabel = computed(() => {
+	const lang = props.plugin.settings.language || 'en';
+	const monthKeys = [
+		'monthJanuary', 'monthFebruary', 'monthMarch', 'monthApril', 'monthMay', 'monthJune',
+		'monthJuly', 'monthAugust', 'monthSeptember', 'monthOctober', 'monthNovember', 'monthDecember'
+	];
+	const month = t(lang, monthKeys[currentDate.value.month()]);
 	const year = currentDate.value.year();
-	return `${month} / ${year}`;
+	const separator = t(lang, 'dateSeparator');
+	return `${month}${separator}${year}`;
 });
 
 const isCurrentMonth = computed(() =>
@@ -212,7 +226,37 @@ const getSettingTasksFolderPath = computed(() => props.plugin.settings.tasksFold
 
 const isSelectedToday = computed(() => selectedDate.value ? isToday(selectedDate.value) : false);
 
-const getTasksHeaderCurrentDate = computed(() => moment(selectedDate.value).format('dddd / D MMMM'));
+const getTasksHeaderCurrentDate = computed(() => {
+	if (!selectedDate.value) return '';
+	
+	const lang = props.plugin.settings.language || 'en';
+	const date = moment(selectedDate.value);
+
+	let dayOfWeek = date.day();
+	dayOfWeek = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+	
+	const weekDayKeys = [
+		'weekDayFullMonday',
+		'weekDayFullTuesday',
+		'weekDayFullWednesday',
+		'weekDayFullThursday',
+		'weekDayFullFriday',
+		'weekDayFullSaturday',
+		'weekDayFullSunday',
+	];
+	
+	const monthGenKeys = [
+		'monthGenJanuary', 'monthGenFebruary', 'monthGenMarch', 'monthGenApril', 'monthGenMay', 'monthGenJune',
+		'monthGenJuly', 'monthGenAugust', 'monthGenSeptember', 'monthGenOctober', 'monthGenNovember', 'monthGenDecember'
+	];
+	
+	const dayName = t(lang, weekDayKeys[dayOfWeek]);
+	const dayNumber = date.date();
+	const monthName = t(lang, monthGenKeys[date.month()]);
+	const separator = t(lang, 'dateSeparator');
+	
+	return `${dayName}${separator}${dayNumber} ${monthName}`;
+});
 
 const isToday = (date: string): boolean => {
 	const today = moment();
@@ -336,7 +380,7 @@ const updateTasksQueryInContainer = async (date: string): Promise<void> => {
 		tasksRef.value.innerHTML = '';
 
 		const query = `\`\`\`tasks
-path includes ${getSettingTasksFolderPath.value}
+${getSettingTasksFolderPath.value ? 'path includes ' + getSettingTasksFolderPath.value : ''}
 filter by function \\
 	const today = task.due.moment?.isSame(moment("${date}"), 'day') || false; \\
 	const overdue = task.due.moment?.isBefore(moment(), 'day') || false; \\
@@ -363,13 +407,16 @@ hide postpone button
 
 const updateTasks = async () => {
 	const files = props.plugin.app.vault.getMarkdownFiles();
-	const tasksFolderPath = props.plugin.settings.tasksFolderPath.replace('/', '');	
+	const tasksFolderPath = getSettingTasksFolderPath.value;
 	const taskPattern = /^[\s]*[-*][\s]+\[\s+\][\s]+.*?📅[\s]+(\d{4}-\d{2}-\d{2})/;
 	tasksByDate.value = {};
 
 	for (const file of files) {
-		const path = file.path.split('/')[0];
-		if (path === tasksFolderPath) {
+		const shouldProcess = tasksFolderPath 
+			? file.path.split('/')[0] === tasksFolderPath
+			: true;
+		
+		if (shouldProcess) {
 			try {
 				const content = await props.plugin.app.vault.read(file);
 				const lines = content.split('\n');
@@ -406,15 +453,23 @@ onMounted(async () => {
 	const metadataCache = props.plugin.app.metadataCache;
 
 	const handleFileChange = (file: TFile) => {
-		const path = file.path.split('/')[0];
-		if (path === getSettingTasksFolderPath.value) {
+		const tasksFolderPath = getSettingTasksFolderPath.value;
+		const shouldProcess = tasksFolderPath 
+			? file.path.split('/')[0] === tasksFolderPath
+			: true;
+		
+		if (shouldProcess) {
 			updateTasks();
 		}
 	};
 
 	const handleMetadataChange = (file: TFile) => {
-		const path = file.path.split('/')[0];
-		if (path === getSettingTasksFolderPath.value) {
+		const tasksFolderPath = getSettingTasksFolderPath.value;
+		const shouldProcess = tasksFolderPath 
+			? file.path.split('/')[0] === tasksFolderPath
+			: true;
+		
+		if (shouldProcess) {
 			updateTasks();
 		}
 	};
