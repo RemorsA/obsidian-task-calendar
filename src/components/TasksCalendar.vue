@@ -275,12 +275,16 @@ const handleClickNext = (): void => {
 	currentDate.value = currentDate.value.clone().add(1, 'month');
 };
 
+const getTasksPlugin = (): any => {
+	const plugins = (props.plugin.app as any).plugins;
+	return plugins?.plugins?.['obsidian-tasks-plugin'];
+};
+
 const handleClickCreateTask = async (): Promise<void> => {
 	const lang = props.plugin.settings.language || 'en';
 	
 	try {
-		const plugins = (props.plugin.app as any).plugins;
-		const tasksPlugin = plugins?.plugins?.['obsidian-tasks-plugin'];
+		const tasksPlugin = getTasksPlugin();
 		
 		if (!tasksPlugin?.apiV1) {
 			new Notice(t(lang, 'tasksPluginNotFound'));
@@ -370,7 +374,7 @@ const handleClickDayNumber = (day: { number: number, date: string, isCurrentMont
 };
 
 const updateTasksQueryInContainer = async (date: string): Promise<void> => {
-	if (tasksRef.value) {
+	if (tasksRef.value && getTasksPlugin()?.apiV1) {
 		selectedDate.value = date;
 		tasksRef.value.innerHTML = '';
 
@@ -402,16 +406,11 @@ hide postpone button
 
 const updateTasks = async () => {
 	const files = props.plugin.app.vault.getMarkdownFiles();
-	const tasksFolderPath = getSettingTasksFolderPath.value;
 	const taskPattern = /^[\s]*[-*][\s]+\[\s+\][\s]+.*?📅[\s]+(\d{4}-\d{2}-\d{2})/;
 	tasksByDate.value = {};
 
 	for (const file of files) {
-		const shouldProcess = tasksFolderPath 
-			? file.path.split('/')[0] === tasksFolderPath
-			: true;
-		
-		if (shouldProcess) {
+		if (file.path.includes(getSettingTasksFolderPath.value)) {
 			try {
 				const content = await props.plugin.app.vault.read(file);
 				const lines = content.split('\n');
@@ -448,23 +447,13 @@ onMounted(async () => {
 	const metadataCache = props.plugin.app.metadataCache;
 
 	const handleFileChange = (file: TFile) => {
-		const tasksFolderPath = getSettingTasksFolderPath.value;
-		const shouldProcess = tasksFolderPath 
-			? file.path.split('/')[0] === tasksFolderPath
-			: true;
-		
-		if (shouldProcess) {
+		if (file.path.includes(getSettingTasksFolderPath.value)) {
 			updateTasks();
 		}
 	};
 
 	const handleMetadataChange = (file: TFile) => {
-		const tasksFolderPath = getSettingTasksFolderPath.value;
-		const shouldProcess = tasksFolderPath 
-			? file.path.split('/')[0] === tasksFolderPath
-			: true;
-		
-		if (shouldProcess) {
+		if (file.path.includes(getSettingTasksFolderPath.value)) {
 			updateTasks();
 		}
 	};

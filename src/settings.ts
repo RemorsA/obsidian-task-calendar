@@ -6,8 +6,8 @@ import { TasksCalendarSettings, Language } from './types';
 export type { TasksCalendarSettings };
 
 export const DEFAULT_SETTINGS: TasksCalendarSettings = {
-	tasksFolderPath: '/',
-	tasksCreateFolderPath: '/',
+	tasksFolderPath: '',
+	tasksCreateFolderPath: '',
 	filenameFormat: 'YYYY-MM',
 	language: 'en',
 	openOnStartup: true,
@@ -59,7 +59,7 @@ export class TasksCalendarSettingTab extends PluginSettingTab {
 			.setName(t(lang, 'tasksFolderPath'))
 			.setDesc(t(lang, 'tasksFolderPathDesc'))
 			.addText(text => text
-				.setPlaceholder('Tasks')
+				.setPlaceholder('')
 				.setValue(this.plugin.settings.tasksFolderPath || '')
 				.onChange(async (value) => {
 					this.plugin.settings.tasksFolderPath = value;
