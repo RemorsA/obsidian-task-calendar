@@ -10,6 +10,7 @@ export const DEFAULT_SETTINGS: TasksCalendarSettings = {
 	tasksCreateFolderPath: '/',
 	filenameFormat: 'YYYY-MM',
 	language: 'en',
+	openOnStartup: true,
 };
 
 export class TasksCalendarSettingTab extends PluginSettingTab {
@@ -25,7 +26,19 @@ export class TasksCalendarSettingTab extends PluginSettingTab {
 		containerEl.empty();
 
 		const lang = this.plugin.settings.language || 'en';
-		containerEl.createEl('h2', { text: t(lang, 'settingsTitle') });
+		new Setting(containerEl)
+			.setName(t(lang, 'settingsTitle'))
+			.setHeading();
+
+		new Setting(containerEl)
+			.setName(t(lang, 'openOnStartup'))
+			.setDesc(t(lang, 'openOnStartupDesc'))
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.openOnStartup ?? true)
+				.onChange(async (value) => {
+					this.plugin.settings.openOnStartup = value;
+					await this.plugin.saveSettings();
+				}));
 
 		new Setting(containerEl)
 			.setName(t(lang, 'language'))

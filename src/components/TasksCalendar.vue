@@ -1,18 +1,11 @@
 <template>
-	<div class="tasks-calendar__container">
-		<div class="tasks-calendar__calendar">
-			<header
-				v-show="!isLoading"
-				class="tasks-calendar__inner-header"
-			>
-				<div class="tasks-calendar__inner-header__nav">
-					<button
-						class="tasks-calendar__button tasks-calendar__inner-nav-prev-button"
-						@click="handleClickPrev"
-					>
-						<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 1024 1024"><!-- Icon from Element Plus by Element Plus - https://github.com/element-plus/element-plus-icons/blob/main/packages/svg/package.json --><path fill="currentColor" d="M224 480h640a32 32 0 1 1 0 64H224a32 32 0 0 1 0-64"/><path fill="currentColor" d="m237.248 512l265.408 265.344a32 32 0 0 1-45.312 45.312l-288-288a32 32 0 0 1 0-45.312l288-288a32 32 0 1 1 45.312 45.312z"/></svg>
-					</button>
-
+	<div class="tasks-calendar__wrapper">
+		<div
+			v-show="!isLoading"
+			class="tasks-calendar__container"
+		>
+			<div class="tasks-calendar__calendar">
+				<header class="tasks-calendar__inner-header">
 					<button
 						class="tasks-calendar__button tasks-calendar__inner-nav-title"
 						:class="{
@@ -23,96 +16,93 @@
 						{{ monthYearLabel }}
 					</button>
 
-					<button
-						class="tasks-calendar__button tasks-calendar__inner-nav-next-button"
-						@click="handleClickNext"
-					>
-						<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 1024 1024"><!-- Icon from Element Plus by Element Plus - https://github.com/element-plus/element-plus-icons/blob/main/packages/svg/package.json --><path fill="currentColor" d="M754.752 480H160a32 32 0 1 0 0 64h594.752L521.344 777.344a32 32 0 0 0 45.312 45.312l288-288a32 32 0 0 0 0-45.312l-288-288a32 32 0 1 0-45.312 45.312z"/></svg>
-					</button>
-				</div>
-
-				<button
-					class="tasks-calendar__button tasks-calendar__inner-create-button"
-					@click="handleClickCreateTask"
-				>
-					<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 1024 1024"><!-- Icon from Element Plus by Element Plus - https://github.com/element-plus/element-plus-icons/blob/main/packages/svg/package.json --><path fill="currentColor" d="M832 512a32 32 0 1 1 64 0v352a32 32 0 0 1-32 32H160a32 32 0 0 1-32-32V160a32 32 0 0 1 32-32h352a32 32 0 0 1 0 64H192v640h640z"/><path fill="currentColor" d="m469.952 554.24l52.8-7.552L847.104 222.4a32 32 0 1 0-45.248-45.248L477.44 501.44l-7.552 52.8zm422.4-422.4a96 96 0 0 1 0 135.808l-331.84 331.84a32 32 0 0 1-18.112 9.088L436.8 623.68a32 32 0 0 1-36.224-36.224l15.104-105.6a32 32 0 0 1 9.024-18.112l331.904-331.84a96 96 0 0 1 135.744 0z"/></svg>
-				</button>
-			</header>
-
-			<div
-				v-show="isLoading"
-				class="tasks-calendar__loading-skeleton --skeleton-calendar-header"
-			></div>
-
-			<div
-				v-show="!isLoading"
-				class="tasks-calendar__inner-calendar"
-			>
-				<div class="tasks-calendar__inner-grid">
-					<header	class="tasks-calendar__grid-header">
-						<div
-							v-for="dayName in weekDays"
-							:key="dayName"
-							class="tasks-calendar__grid-week-name"
-						>
-							{{ dayName }}
-						</div>
-					</header>
-
-					<main class="tasks-calendar__grid-week-numbers">
+					<div class="tasks-calendar__inner-nav-buttons-group">
 						<button
-							v-for="day in flatCalendarDays"
-							:key="day.date"
-							class="tasks-calendar__button tasks-calendar__grid-week-day"
-							:class="{
-								'--is-today': isToday(day.date),
-								'--is-other-month': !day.isCurrentMonth,
-								'--is-focused': day.date === selectedDate
-							}"
-							@click="handleClickDayNumber(day, $event)"
+							class="tasks-calendar__button tasks-calendar__inner-nav-prev-button"
+							@click="handleClickPrev"
 						>
-							<span class="tasks-calendar__grid-week-day--number">
-								{{ day.number }}
-							</span>
-
-							<span
-								v-if="hasTasks(day.date)"
-								class="tasks-calendar__grid-week-day--dot"
-							></span>
+							<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 1024 1024"><!-- Icon from Element Plus by Element Plus - https://github.com/element-plus/element-plus-icons/blob/main/packages/svg/package.json --><path fill="currentColor" d="M224 480h640a32 32 0 1 1 0 64H224a32 32 0 0 1 0-64"/><path fill="currentColor" d="m237.248 512l265.408 265.344a32 32 0 0 1-45.312 45.312l-288-288a32 32 0 0 1 0-45.312l288-288a32 32 0 1 1 45.312 45.312z"/></svg>
 						</button>
-					</main>
+
+						<button
+							class="tasks-calendar__button tasks-calendar__inner-nav-next-button"
+							@click="handleClickNext"
+						>
+							<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 1024 1024"><!-- Icon from Element Plus by Element Plus - https://github.com/element-plus/element-plus-icons/blob/main/packages/svg/package.json --><path fill="currentColor" d="M754.752 480H160a32 32 0 1 0 0 64h594.752L521.344 777.344a32 32 0 0 0 45.312 45.312l288-288a32 32 0 0 0 0-45.312l-288-288a32 32 0 1 0-45.312 45.312z"/></svg>
+						</button>
+
+						<button
+							class="tasks-calendar__button tasks-calendar__inner-nav-create-button"
+							@click="handleClickCreateTask"
+						>
+							<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 1024 1024"><!-- Icon from Element Plus by Element Plus - https://github.com/element-plus/element-plus-icons/blob/main/packages/svg/package.json --><path fill="currentColor" d="M832 512a32 32 0 1 1 64 0v352a32 32 0 0 1-32 32H160a32 32 0 0 1-32-32V160a32 32 0 0 1 32-32h352a32 32 0 0 1 0 64H192v640h640z"/><path fill="currentColor" d="m469.952 554.24l52.8-7.552L847.104 222.4a32 32 0 1 0-45.248-45.248L477.44 501.44l-7.552 52.8zm422.4-422.4a96 96 0 0 1 0 135.808l-331.84 331.84a32 32 0 0 1-18.112 9.088L436.8 623.68a32 32 0 0 1-36.224-36.224l15.104-105.6a32 32 0 0 1 9.024-18.112l331.904-331.84a96 96 0 0 1 135.744 0z"/></svg>
+						</button>
+					</div>
+				</header>
+
+				<div class="tasks-calendar__inner-calendar">
+					<div class="tasks-calendar__inner-grid">
+						<header	class="tasks-calendar__grid-header">
+							<div
+								v-for="dayName in weekDays"
+								:key="dayName"
+								class="tasks-calendar__grid-week-name"
+							>
+								{{ dayName }}
+							</div>
+						</header>
+
+						<main class="tasks-calendar__grid-week-numbers">
+							<button
+								v-for="day in flatCalendarDays"
+								:key="day.date"
+								class="tasks-calendar__button tasks-calendar__grid-week-day"
+								:class="{
+									'--is-today': isToday(day.date),
+									'--is-other-month': !day.isCurrentMonth,
+									'--is-focused': day.date === selectedDate
+								}"
+								@click="handleClickDayNumber(day, $event)"
+							>
+								<span class="tasks-calendar__grid-week-day--number">
+									{{ day.number }}
+								</span>
+
+								<span
+									v-if="hasTasks(day.date)"
+									class="tasks-calendar__grid-week-day--dot"
+								></span>
+							</button>
+						</main>
+					</div>
 				</div>
 			</div>
 
-			<div
-				v-show="isLoading"
-				class="tasks-calendar__loading-skeleton --skeleton-calendar-calendar"
-			></div>
-		</div>
+			<div class="tasks-calendar__tasks">
+				<header
+					class="tasks-calendar__tasks-header"
+					:class="{
+						'--is-today': isSelectedToday
+					}"
+				>
+					{{ getTasksHeaderCurrentDate }}
+				</header>
 
-		<div
-			v-show="!isLoading"
-			class="tasks-calendar__tasks"
-		>
-			<header
-				class="tasks-calendar__tasks-header"
-				:class="{
-					'--is-today': isSelectedToday
-				}"
-			>
-				{{ getTasksHeaderCurrentDate }}
-			</header>
-
-			<div
-				ref="tasksRef"
-				class="tasks-calendar__tasks-tasks"
-			></div>
+				<div
+					ref="tasksRef"
+					class="tasks-calendar__tasks-tasks"
+				></div>
+			</div>
 		</div>
 
 		<div
 			v-show="isLoading"
-			class="tasks-calendar__loading-skeleton --skeleton-tasks"
-		></div>
+			class="tasks-calendar__loading"
+		>
+			<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24"><!-- Icon from Material Line Icons by Vjacheslav Trushkin - https://github.com/cyberalien/line-md/blob/master/license.txt --><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path stroke-dasharray="16" stroke-dashoffset="16" d="M12 3c4.97 0 9 4.03 9 9"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.3s" values="16;0"/><animateTransform attributeName="transform" dur="1.5s" repeatCount="indefinite" type="rotate" values="0 12 12;360 12 12"/></path><path stroke-dasharray="64" stroke-dashoffset="64" stroke-opacity=".3" d="M12 3c4.97 0 9 4.03 9 9c0 4.97 -4.03 9 -9 9c-4.97 0 -9 -4.03 -9 -9c0 -4.97 4.03 -9 9 -9Z"><animate fill="freeze" attributeName="stroke-dashoffset" dur="1.2s" values="64;0"/></path></g></svg>
+
+			<h4>{{ loadingText }}</h4>
+		</div>
 	</div>
 </template>
 
@@ -155,6 +145,11 @@ const monthYearLabel = computed(() => {
 	const year = currentDate.value.year();
 	const separator = t(lang, 'dateSeparator');
 	return `${month}${separator}${year}`;
+});
+
+const loadingText = computed(() => {
+	const lang = props.plugin.settings.language || 'en';
+	return t(lang, 'loading');
 });
 
 const isCurrentMonth = computed(() =>
@@ -420,7 +415,7 @@ const updateTasks = async () => {
 			try {
 				const content = await props.plugin.app.vault.read(file);
 				const lines = content.split('\n');
-				
+
 				for (const line of lines) {
 					if (line.includes('✅')) continue;
 

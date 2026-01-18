@@ -5,6 +5,8 @@ export type { Language };
 export const translations: Record<Language, Translations> = {
 	ru: {
 		'settingsTitle': 'Настройки Tasks Calendar',
+		'openOnStartup': 'Открывать при запуске',
+		'openOnStartupDesc': 'Автоматически открывать календарь задач при запуске приложения. Если календарь уже открыт, переключаться на его вкладку.',
 		'tasksFolderPath': 'Путь к папке с задачами',
 		'tasksFolderPathDesc': 'Путь к папке с задачами (например, "Tasks" или "Notes/Tasks"). Оставьте пустым, чтобы использовать корень хранилища.',
 		'tasksSaveFolderPath': 'Путь к папке для сохранения задач',
@@ -61,9 +63,12 @@ export const translations: Record<Language, Translations> = {
 		'monthGenOctober': 'Октября',
 		'monthGenNovember': 'Ноября',
 		'monthGenDecember': 'Декабря',
+		'loading': 'Идет загрузка',
 	},
 	de: {
 		'settingsTitle': 'Tasks Calendar Einstellungen',
+		'openOnStartup': 'Beim Start öffnen',
+		'openOnStartupDesc': 'Aufgabenkalender beim Start der Anwendung automatisch öffnen. Wenn der Kalender bereits geöffnet ist, zur Registerkarte wechseln.',
 		'tasksFolderPath': 'Pfad zum Aufgabenordner',
 		'tasksFolderPathDesc': 'Pfad zum Ordner mit Aufgaben (z.B. "Tasks" oder "Notes/Tasks"). Leer lassen, um das Stammverzeichnis zu verwenden.',
 		'tasksSaveFolderPath': 'Pfad zum Ordner zum Speichern von Aufgaben',
@@ -120,9 +125,12 @@ export const translations: Record<Language, Translations> = {
 		'monthGenOctober': 'Oktober',
 		'monthGenNovember': 'November',
 		'monthGenDecember': 'Dezember',
+		'loading': 'Lädt...',
 	},
 	ch: {
 		'settingsTitle': 'Tasks Calendar 设置',
+		'openOnStartup': '启动时打开',
+		'openOnStartupDesc': '启动应用程序时自动打开任务日历。如果日历已打开，则切换到其标签页。',
 		'tasksFolderPath': '任务文件夹路径',
 		'tasksFolderPathDesc': '包含任务的文件夹路径（例如，"Tasks" 或 "Notes/Tasks"）。留空以使用库根目录。',
 		'tasksSaveFolderPath': '保存任务的文件夹路径',
@@ -179,9 +187,12 @@ export const translations: Record<Language, Translations> = {
 		'monthGenOctober': '十月',
 		'monthGenNovember': '十一月',
 		'monthGenDecember': '十二月',
+		'loading': '加载中',
 	},
 	en: {
 		'settingsTitle': 'Tasks Calendar Settings',
+		'openOnStartup': 'Open on startup',
+		'openOnStartupDesc': 'Automatically open the tasks calendar when the application starts. If the calendar is already open, switch to its tab.',
 		'tasksFolderPath': 'Tasks folder path',
 		'tasksFolderPathDesc': 'Path to folder containing tasks (e.g., "Tasks" or "Notes/Tasks"). Leave empty to use vault root.',
 		'tasksSaveFolderPath': 'Tasks save folder path',
@@ -190,7 +201,7 @@ export const translations: Record<Language, Translations> = {
 		'dateFormatForFileHeaderDesc': 'Date format for file names when creating tasks (e.g., YYYY-MM, YYYY-MM-DD). Uses moment.js format tokens.',
 		'language': 'Language',
 		'languageDesc': 'Interface language',
-		'openTaskCalendar': 'Open Tasks Calendar',
+		'openTaskCalendar': 'Open tasks calendar',
 		'tasksPluginNotFound': 'Tasks plugin not found',
 		'tasksApiMethodNotAvailable': 'Tasks API method not available',
 		'failedToOpenTaskModal': 'Failed to open task creation modal',
@@ -238,6 +249,7 @@ export const translations: Record<Language, Translations> = {
 		'monthGenOctober': 'October',
 		'monthGenNovember': 'November',
 		'monthGenDecember': 'December',
+		'loading': 'Loading...',
 	}
 };
 

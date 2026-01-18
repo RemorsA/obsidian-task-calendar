@@ -1,4 +1,4 @@
-import { Plugin, View } from 'obsidian';
+import { Plugin, WorkspaceLeaf } from 'obsidian';
 import { TasksCalendarSettings, DEFAULT_SETTINGS, TasksCalendarSettingTab } from './src/settings';
 import { t } from './src/locales';
 import { TasksCalendarView } from './src/views/TasksCalendarView';
@@ -12,8 +12,8 @@ export default class TasksCalendarPlugin extends Plugin {
 		this.addSettingTab(new TasksCalendarSettingTab(this.app, this));
 
 		this.registerView(
-			'tasks-calendar-view',
-			(leaf) => new TasksCalendarView(leaf, this) as unknown as View
+			'tasks-calendar',
+			(leaf) => new TasksCalendarView(leaf, this)
 		);
 
 		this.addCommand({
@@ -23,32 +23,38 @@ export default class TasksCalendarPlugin extends Plugin {
 				await this.openCalendar();
 			}
 		});
+
+		if (this.settings.openOnStartup) {
+			this.app.workspace.onLayoutReady(async () => {
+				await this.openCalendar();
+			});
+		}
 	}
 
-	onunload() {
-		this.app.workspace.detachLeavesOfType('tasks-calendar-view');
-	}
+	onunload() {}
 
 	async openCalendar() {
 		const { workspace } = this.app;
-		const leaves = workspace.getLeavesOfType('tasks-calendar-view');
+		let leaf: WorkspaceLeaf | null = null;
+		const leaves = workspace.getLeavesOfType('tasks-calendar');
 
 		if (leaves.length > 0) {
-			workspace.revealLeaf(leaves[0]);
+			leaf = leaves[0];
 		} else {
-			const rightLeaf = workspace.getRightLeaf(false);
+			leaf = workspace.getLeaf(true);
+			await leaf.setViewState({
+				type: 'tasks-calendar',
+				active: true,
+			});
+		}
 
-			if (rightLeaf) {
-				await rightLeaf.setViewState({
-					type: 'tasks-calendar-view',
-					active: true,
-				});
-			}
+		if (leaf) {
+			workspace.setActiveLeaf(leaf);
 		}
 	}
 
 	async loadSettings() {
-		const loadedData = await this.loadData() as any;
+		const loadedData = await this.loadData() as Partial<TasksCalendarSettings> | null;
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, loadedData);
 
 		await this.saveSettings();

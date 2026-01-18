@@ -9,5 +9,6 @@ export interface TasksCalendarSettings {
 	tasksCreateFolderPath: string;
 	filenameFormat: string;
 	language: Language;
+	openOnStartup: boolean;
 }
 

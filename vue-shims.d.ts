@@ -1,11 +1,11 @@
 declare module '*.vue' {
 	import type { DefineComponent } from 'vue';
-	const component: DefineComponent<{}, {}, any>;
+	const component: DefineComponent<Record<string, never>, Record<string, never>, Record<string, unknown>>;
 	export default component;
 }
 
-declare function moment(inp?: moment.MomentInput, strict?: boolean): moment.Moment;
-declare function moment(inp?: moment.MomentInput, format?: moment.MomentFormatSpecification, strict?: boolean): moment.Moment;
+declare function moment(inp?: unknown, strict?: boolean): moment.Moment;
+declare function moment(inp?: unknown, format?: unknown, strict?: boolean): moment.Moment;
 declare namespace moment {
 	interface Moment {
 		clone(): Moment;
@@ -24,7 +24,5 @@ declare namespace moment {
 		isBefore(other: Moment, unit?: string): boolean;
 		format(format?: string): string;
 	}
-	interface MomentInput {}
-	interface MomentFormatSpecification {}
 }
 
