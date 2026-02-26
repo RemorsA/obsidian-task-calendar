@@ -79,12 +79,7 @@
 			</div>
 
 			<div class="tasks-calendar__tasks">
-				<header
-					class="tasks-calendar__tasks-header"
-					:class="{
-						'--is-today': isSelectedToday
-					}"
-				>
+				<header	class="tasks-calendar__tasks-header">
 					{{ getTasksHeaderCurrentDate }}
 				</header>
 
@@ -218,8 +213,6 @@ const calendarDays = computed(() => {
 const flatCalendarDays = computed(() => calendarDays.value.flat());
 
 const getSettingTasksFolderPath = computed(() => props.plugin.settings.tasksFolderPath.replace('/', ''));
-
-const isSelectedToday = computed(() => selectedDate.value ? isToday(selectedDate.value) : false);
 
 const getTasksHeaderCurrentDate = computed(() => {
 	if (!selectedDate.value) return '';
