@@ -30,13 +30,6 @@
 						>
 							<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 1024 1024"><!-- Icon from Element Plus by Element Plus - https://github.com/element-plus/element-plus-icons/blob/main/packages/svg/package.json --><path fill="currentColor" d="M754.752 480H160a32 32 0 1 0 0 64h594.752L521.344 777.344a32 32 0 0 0 45.312 45.312l288-288a32 32 0 0 0 0-45.312l-288-288a32 32 0 1 0-45.312 45.312z"/></svg>
 						</button>
-
-						<button
-							class="tasks-calendar__button tasks-calendar__inner-nav-create-button"
-							@click="handleClickCreateTask"
-						>
-							<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 1024 1024"><!-- Icon from Element Plus by Element Plus - https://github.com/element-plus/element-plus-icons/blob/main/packages/svg/package.json --><path fill="currentColor" d="M832 512a32 32 0 1 1 64 0v352a32 32 0 0 1-32 32H160a32 32 0 0 1-32-32V160a32 32 0 0 1 32-32h352a32 32 0 0 1 0 64H192v640h640z"/><path fill="currentColor" d="m469.952 554.24l52.8-7.552L847.104 222.4a32 32 0 1 0-45.248-45.248L477.44 501.44l-7.552 52.8zm422.4-422.4a96 96 0 0 1 0 135.808l-331.84 331.84a32 32 0 0 1-18.112 9.088L436.8 623.68a32 32 0 0 1-36.224-36.224l15.104-105.6a32 32 0 0 1 9.024-18.112l331.904-331.84a96 96 0 0 1 135.744 0z"/></svg>
-						</button>
 					</div>
 				</header>
 
@@ -79,9 +72,41 @@
 			</div>
 
 			<div class="tasks-calendar__tasks">
-				<header	class="tasks-calendar__tasks-header">
-					{{ getTasksHeaderCurrentDate }}
-				</header>
+				<div class="tasks-calendar__actions">
+					<div class="action-date__recur">
+						<input
+							class="action-date"
+							type="date"
+							v-model="actionDate"
+						>
+
+						<input
+							class="action-recur"
+							type="text"
+							placeholder="🔁"
+							v-model="actionRecur"
+							:class="{ '--is-invalid': actionRecur.trim() && !isValidRecur }"
+						>
+					</div>
+
+					<div class="action-text__and__create">
+						<input
+							class="action-input"
+							type="text"
+							placeholder="..."
+							v-model="actionText"
+							@keydown.enter="handleClickActionCreate"
+						>
+
+						<button
+							class="tasks-calendar__button action-create"
+							:disabled="isCreateButtonDisabled"
+							@click="handleClickActionCreate"
+						>
+							<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 1024 1024"><!-- Icon from Element Plus by Element Plus - https://github.com/element-plus/element-plus-icons/blob/main/packages/svg/package.json --><path fill="currentColor" d="M832 512a32 32 0 1 1 64 0v352a32 32 0 0 1-32 32H160a32 32 0 0 1-32-32V160a32 32 0 0 1 32-32h352a32 32 0 0 1 0 64H192v640h640z"/><path fill="currentColor" d="m469.952 554.24l52.8-7.552L847.104 222.4a32 32 0 1 0-45.248-45.248L477.44 501.44l-7.552 52.8zm422.4-422.4a96 96 0 0 1 0 135.808l-331.84 331.84a32 32 0 0 1-18.112 9.088L436.8 623.68a32 32 0 0 1-36.224-36.224l15.104-105.6a32 32 0 0 1 9.024-18.112l331.904-331.84a96 96 0 0 1 135.744 0z"/></svg>
+						</button>
+					</div>
+				</div>
 
 				<div
 					ref="tasksRef"
@@ -116,40 +141,63 @@ const currentDate = ref(moment());
 const tasksByDate = ref<Record<string, boolean>>({});
 const isLoading = ref(false);
 const selectedDate = ref<string>('');
+const actionDate = ref<string>(moment().format('YYYY-MM-DD'));
+const actionRecur = ref<string>('');
+const actionText = ref<string>('');
 
-const weekDays = computed(() => {
-	const lang = props.plugin.settings.language || 'en';
-	return [
-		t(lang, 'weekDayMon'),
-		t(lang, 'weekDayTue'),
-		t(lang, 'weekDayWed'),
-		t(lang, 'weekDayThu'),
-		t(lang, 'weekDayFri'),
-		t(lang, 'weekDaySat'),
-		t(lang, 'weekDaySun'),
-	];
-});
+const getLang = computed(() =>
+	window.localStorage.getItem('language') as Language || 'en'
+);
+
+const weekDays = computed(() => [
+	t(getLang.value, 'weekDayMon'),
+	t(getLang.value, 'weekDayTue'),
+	t(getLang.value, 'weekDayWed'),
+	t(getLang.value, 'weekDayThu'),
+	t(getLang.value, 'weekDayFri'),
+	t(getLang.value, 'weekDaySat'),
+	t(getLang.value, 'weekDaySun'),
+]);
 
 const monthYearLabel = computed(() => {
-	const lang = props.plugin.settings.language || 'en';
 	const monthKeys = [
-		'monthJanuary', 'monthFebruary', 'monthMarch', 'monthApril', 'monthMay', 'monthJune',
-		'monthJuly', 'monthAugust', 'monthSeptember', 'monthOctober', 'monthNovember', 'monthDecember'
+		'monthJanuary',
+		'monthFebruary',
+		'monthMarch',
+		'monthApril',
+		'monthMay',
+		'monthJune',
+		'monthJuly',
+		'monthAugust',
+		'monthSeptember',
+		'monthOctober',
+		'monthNovember',
+		'monthDecember',
 	];
-	const month = t(lang, monthKeys[currentDate.value.month()]);
+	const month = t(getLang.value, monthKeys[currentDate.value.month()]);
 	const year = currentDate.value.year();
-	const separator = t(lang, 'dateSeparator');
+	const separator = t(getLang.value, 'dateSeparator');
+
 	return `${month}${separator}${year}`;
 });
 
-const loadingText = computed(() => {
-	const lang = props.plugin.settings.language || 'en';
-	return t(lang, 'loading');
-});
+const loadingText = computed(() =>
+	t(getLang.value, 'loading')
+);
 
 const isCurrentMonth = computed(() =>
 	currentDate.value.month() === moment().month() && currentDate.value.year() === moment().year()
 );
+
+const isValidRecur = computed((): boolean => {
+	const val = actionRecur.value.trim();
+	if (!val) return true;
+	return /^every\s+(\d+\s+)?(day|days|week|weeks|month|months|year|years|weekday|weekdays|monday|tuesday|wednesday|thursday|friday|saturday|sunday|january|february|march|april|may|june|july|august|september|october|november|december)(\s+.*)?$/i.test(val);
+});
+
+const isCreateButtonDisabled = computed((): boolean => {
+	return !actionDate.value || !actionText.value.trim() || !isValidRecur.value;
+});
 
 const calendarDays = computed(() => {
 	const days: Array<{ number: number; date: string; isCurrentMonth: boolean }> = [];
@@ -210,41 +258,13 @@ const calendarDays = computed(() => {
 	return weeks;
 });
 
-const flatCalendarDays = computed(() => calendarDays.value.flat());
+const flatCalendarDays = computed(() =>
+	calendarDays.value.flat()
+);
 
-const getSettingTasksFolderPath = computed(() => props.plugin.settings.tasksFolderPath.replace('/', ''));
-
-const getTasksHeaderCurrentDate = computed(() => {
-	if (!selectedDate.value) return '';
-	
-	const lang = props.plugin.settings.language || 'en';
-	const date = moment(selectedDate.value);
-
-	let dayOfWeek = date.day();
-	dayOfWeek = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
-	
-	const weekDayKeys = [
-		'weekDayFullMonday',
-		'weekDayFullTuesday',
-		'weekDayFullWednesday',
-		'weekDayFullThursday',
-		'weekDayFullFriday',
-		'weekDayFullSaturday',
-		'weekDayFullSunday',
-	];
-	
-	const monthGenKeys = [
-		'monthGenJanuary', 'monthGenFebruary', 'monthGenMarch', 'monthGenApril', 'monthGenMay', 'monthGenJune',
-		'monthGenJuly', 'monthGenAugust', 'monthGenSeptember', 'monthGenOctober', 'monthGenNovember', 'monthGenDecember'
-	];
-	
-	const dayName = t(lang, weekDayKeys[dayOfWeek]);
-	const dayNumber = date.date();
-	const monthName = t(lang, monthGenKeys[date.month()]);
-	const separator = t(lang, 'dateSeparator');
-	
-	return `${dayName}${separator}${dayNumber} ${monthName}`;
-});
+const getSettingTasksFolderPath = computed(() =>
+	props.plugin.settings.tasksFolderPath.replace('/', '')
+);
 
 const isToday = (date: string): boolean => {
 	const today = moment();
@@ -274,29 +294,27 @@ const getTasksPlugin = (): any => {
 };
 
 const handleClickCreateTask = async (): Promise<void> => {
-	const lang = props.plugin.settings.language || 'en';
-	
 	try {
 		const tasksPlugin = getTasksPlugin();
-		
+
 		if (!tasksPlugin?.apiV1) {
-			new Notice(t(lang, 'tasksPluginNotFound'));
+			new Notice(t(getLang.value, 'tasksPluginNotFound'));
 			return;
 		}
 
 		const tasksApi = tasksPlugin.apiV1;		
 		let taskLine: string | null = null;
-		
+
 		try {
 			if (typeof tasksApi.createTaskLineModal === 'function') {
 				taskLine = await tasksApi.createTaskLineModal();
 			} else {
-				new Notice(t(lang, 'tasksApiMethodNotAvailable'));
+				new Notice(t(getLang.value, 'tasksApiMethodNotAvailable'));
 				return;
 			}
 		} catch (error) {
 			console.error('Error opening task modal:', error);
-			new Notice(t(lang, 'failedToOpenTaskModal'));
+			new Notice(t(getLang.value, 'failedToOpenTaskModal'));
 			return;
 		}
 
@@ -307,16 +325,15 @@ const handleClickCreateTask = async (): Promise<void> => {
 		const dateMatch = taskLine.match(/📅[\s]+(\d{4}-\d{2}-\d{2})/);
 
 		if (!dateMatch) {
-			new Notice(t(lang, 'taskMustContainDate'));
+			new Notice(t(getLang.value, 'taskMustContainDate'));
 			return;
 		}
 
 		const dateStr = dateMatch[1];
 		const taskDate = moment(dateStr);
-		const filenameFormat = props.plugin.settings.filenameFormat || 'YYYY-MM';
+		const filenameFormat = props.plugin.settings.filenameFormat;
 		const filename = taskDate.format(filenameFormat) + '.md';		
-		const tasksCreateFolderPath = props.plugin.settings.tasksCreateFolderPath || props.plugin.settings.tasksFolderPath || '/';
-		const folderPath = tasksCreateFolderPath.replace(/^\/+|\/+$/g, '');
+		const folderPath = getSettingTasksFolderPath.value.replace(/^\/+|\/+$/g, '');
 		const filePath = folderPath ? `${folderPath}/${filename}` : filename;
 		let targetFile = props.plugin.app.vault.getAbstractFileByPath(filePath) as TFile;
 		
@@ -325,7 +342,7 @@ const handleClickCreateTask = async (): Promise<void> => {
 				targetFile = await props.plugin.app.vault.create(filePath, '');
 			} catch (error) {
 				console.error('Error creating file:', error);
-				new Notice(t(lang, 'failedToCreateFile'));
+				new Notice(t(getLang.value, 'failedToCreateFile'));
 				return;
 			}
 		}
@@ -336,7 +353,7 @@ const handleClickCreateTask = async (): Promise<void> => {
 			content = await props.plugin.app.vault.read(targetFile);
 		} catch (error) {
 			console.error('Error reading file:', error);
-			new Notice(t(lang, 'failedToReadFile'));
+			new Notice(t(getLang.value, 'failedToReadFile'));
 			return;
 		}
 
@@ -347,20 +364,83 @@ const handleClickCreateTask = async (): Promise<void> => {
 
 		try {
 			await props.plugin.app.vault.modify(targetFile, newContent);
-			new Notice(t(lang, 'taskAddedSuccessfully'));
+			new Notice(t(getLang.value, 'taskAddedSuccessfully'));
 			
 			await updateTasks();
 		} catch (error) {
 			console.error('Error writing to file:', error);
-			new Notice(t(lang, 'failedToAddTask'));
+			new Notice(t(getLang.value, 'failedToAddTask'));
 		}
 	} catch (error) {
 		console.error('Error creating task:', error);
-		new Notice(t(lang, 'failedToAddTask'));
+		new Notice(t(getLang.value, 'failedToAddTask'));
+	}
+};
+
+const handleClickActionCreate = async (): Promise<void> => {
+	if (isCreateButtonDisabled.value) return;
+
+	try {
+		const dateStr = actionDate.value;
+		const recur = actionRecur.value.trim();
+		const text = actionText.value.trim();
+
+		let taskLine = `- [ ] ${text}`;
+		if (recur) {
+			taskLine += ` 🔁 ${recur}`;
+		}
+		taskLine += ` 📅 ${dateStr}`;
+
+		const taskDate = moment(dateStr);
+		const filenameFormat = props.plugin.settings.filenameFormat;
+		const filename = taskDate.format(filenameFormat) + '.md';
+		const folderPath = getSettingTasksFolderPath.value.replace(/^\/+|\/+$/g, '');
+		const filePath = folderPath ? `${folderPath}/${filename}` : filename;
+		let targetFile = props.plugin.app.vault.getAbstractFileByPath(filePath) as TFile;
+
+		if (!targetFile) {
+			try {
+				targetFile = await props.plugin.app.vault.create(filePath, '');
+			} catch (error) {
+				console.error('Error creating file:', error);
+				new Notice(t(getLang.value, 'failedToCreateFile'));
+				return;
+			}
+		}
+
+		let content = '';
+		try {
+			content = await props.plugin.app.vault.read(targetFile);
+		} catch (error) {
+			console.error('Error reading file:', error);
+			new Notice(t(getLang.value, 'failedToReadFile'));
+			return;
+		}
+
+		const trimmedContent = content.trimEnd();
+		const taskText = taskLine.trim();
+		const separator = trimmedContent.length > 0 ? '\n' : '';
+		const newContent = trimmedContent + separator + taskText + '\n';
+
+		try {
+			await props.plugin.app.vault.modify(targetFile, newContent);
+			new Notice(t(getLang.value, 'taskAddedSuccessfully'));
+			actionDate.value = '';
+			actionRecur.value = '';
+			actionText.value = '';
+			await updateTasks();
+		} catch (error) {
+			console.error('Error writing to file:', error);
+			new Notice(t(getLang.value, 'failedToAddTask'));
+		}
+	} catch (error) {
+		console.error('Error creating task:', error);
+		new Notice(t(getLang.value, 'failedToAddTask'));
 	}
 };
 
 const handleClickDayNumber = (day: { number: number, date: string, isCurrentMonth: boolean }, event: any): void => {
+	actionDate.value = day.date;
 	if (day.date !== selectedDate.value) {
 		updateTasksQueryInContainer(day.date);
 	}
@@ -381,6 +461,7 @@ filter by function \\
 sort by due AND done
 short
 show tree
+hide toolbar
 hide due date
 hide recurrence rule
 hide task count

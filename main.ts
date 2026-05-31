@@ -16,9 +16,13 @@ export default class TasksCalendarPlugin extends Plugin {
 			(leaf) => new TasksCalendarView(leaf, this)
 		);
 
+		this.addRibbonIcon('calendar-check-2', t((window.localStorage.getItem('language') as 'ru' | 'en') || 'en', 'openTaskCalendar'), async () => {
+			await this.openCalendar();
+		});
+
 		this.addCommand({
 			id: 'open-task-calendar',
-			name: t(this.settings.language || 'en', 'openTaskCalendar'),
+			name: t((window.localStorage.getItem('language') as 'ru' | 'en') || 'en', 'openTaskCalendar'),
 			callback: async () => {
 				await this.openCalendar();
 			}
