@@ -425,7 +425,6 @@ const handleClickActionCreate = async (): Promise<void> => {
 		try {
 			await props.plugin.app.vault.modify(targetFile, newContent);
 			new Notice(t(getLang.value, 'taskAddedSuccessfully'));
-			actionDate.value = '';
 			actionRecur.value = '';
 			actionText.value = '';
 			await updateTasks();
