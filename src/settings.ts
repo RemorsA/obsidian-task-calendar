@@ -1,7 +1,6 @@
 import { App, PluginSettingTab, Setting } from 'obsidian';
 import TasksCalendarPlugin from '../main';
-import { t } from './locales';
-import { TasksCalendarSettings, Language } from './types';
+import { TasksCalendarSettings } from './types';
 
 export type { TasksCalendarSettings };
 
@@ -22,10 +21,9 @@ export class TasksCalendarSettingTab extends PluginSettingTab {
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
-		const lang = window.localStorage.getItem('language') as Language || 'en';
 
 		new Setting(containerEl)
-			.setName(t(lang, 'openOnStartup'))
+			.setName('Открывать при запуске')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.openOnStartup)
 				.onChange(async (value) => {
@@ -34,7 +32,7 @@ export class TasksCalendarSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(containerEl)
-			.setName(t(lang, 'tasksFolderPath'))
+			.setName('Путь к папке с задачами')
 			.addText(text => text
 				.setPlaceholder('')
 				.setValue(this.plugin.settings.tasksFolderPath)
@@ -44,7 +42,7 @@ export class TasksCalendarSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(containerEl)
-			.setName(t(lang, 'dateFormatForFileHeader'))
+			.setName('Формат даты для заголовка файла')
 			.addText(text => text
 				.setPlaceholder('YYYY')
 				.setValue(this.plugin.settings.filenameFormat)

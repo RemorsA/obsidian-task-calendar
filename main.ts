@@ -1,6 +1,5 @@
 import { Plugin, WorkspaceLeaf } from 'obsidian';
 import { TasksCalendarSettings, DEFAULT_SETTINGS, TasksCalendarSettingTab } from './src/settings';
-import { t } from './src/locales';
 import { TasksCalendarView } from './src/views/TasksCalendarView';
 
 export default class TasksCalendarPlugin extends Plugin {
@@ -16,13 +15,13 @@ export default class TasksCalendarPlugin extends Plugin {
 			(leaf) => new TasksCalendarView(leaf, this)
 		);
 
-		this.addRibbonIcon('calendar-check-2', t((window.localStorage.getItem('language') as 'ru' | 'en') || 'en', 'openTaskCalendar'), async () => {
+		this.addRibbonIcon('calendar-check-2', 'Открыть календарь задач', async () => {
 			await this.openCalendar();
 		});
 
 		this.addCommand({
 			id: 'open-task-calendar',
-			name: t((window.localStorage.getItem('language') as 'ru' | 'en') || 'en', 'openTaskCalendar'),
+			name: 'Открыть календарь задач',
 			callback: async () => {
 				await this.openCalendar();
 			}
