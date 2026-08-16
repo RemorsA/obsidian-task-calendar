@@ -1,23 +1,24 @@
 import { ItemView, WorkspaceLeaf } from 'obsidian';
 import { App as VueApp, createApp } from 'vue';
-import TasksCalendarPlugin from '../../main';
-import TasksCalendar from '../components/TasksCalendar.vue';
+import TaskCalendar from '../components/TaskCalendar.vue';
+import type TaskCalendarPlugin from '../TaskCalendarPlugin';
+import { VIEW_TYPE_TASK_CALENDAR } from '../types';
 
-export class TasksCalendarView extends ItemView {
-	plugin: TasksCalendarPlugin;
+export class TaskCalendarView extends ItemView {
+	plugin: TaskCalendarPlugin;
 	private vueApp: VueApp | null = null;
 
-	constructor(leaf: WorkspaceLeaf, plugin: TasksCalendarPlugin) {
+	constructor(leaf: WorkspaceLeaf, plugin: TaskCalendarPlugin) {
 		super(leaf);
 		this.plugin = plugin;
 	}
 
 	getViewType(): string {
-		return 'tasks-calendar';
+		return VIEW_TYPE_TASK_CALENDAR;
 	}
 
 	getDisplayText(): string {
-		return 'Tasks calendar';
+		return 'Task calendar';
 	}
 
 	getIcon(): string {
@@ -31,8 +32,8 @@ export class TasksCalendarView extends ItemView {
 
 		const vueContainer = document.createElement('div');
 		container.appendChild(vueContainer);
-		
-		this.vueApp = await createApp(TasksCalendar, {
+
+		this.vueApp = await createApp(TaskCalendar, {
 			plugin: this.plugin,
 		});
 		this.vueApp.mount(vueContainer);
@@ -46,4 +47,3 @@ export class TasksCalendarView extends ItemView {
 		}
 	}
 }
-

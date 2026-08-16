@@ -1,11 +1,13 @@
-.tasks-calendar__wrapper {
-	min-width: 350px;
+.task__calendar-container {
+	min-width: 300px;
+	/* Один период волны: маска для разделителя «Выполнено». */
+	--task__calendar-wave: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='6' viewBox='0 0 16 6'%3E%3Cpath d='M0 3q4-3 8 0t8 0' fill='none' stroke='%23000' stroke-width='1.5'/%3E%3C/svg%3E");
 
 	@media (width <= 768px) {
 		padding-bottom: 40px;
 	}
 
-	.tasks-calendar__button {
+	.task__calendar-default-button {
 		display: flex;
 		align-items: center;
 		justify-content: center;
@@ -19,263 +21,249 @@
 		border-radius: 20px;
 		padding: 5px;
 		box-shadow: none !important;
+		height: 40px;
+
+		svg {
+			height: 20px;
+		}
+
+		@media (hover: hover) and (pointer: fine) {
+			&:hover {
+				background-color: var(--color-base-30);
+			}
+		}
+
+		&:active {
+			background-color: var(--color-base-30);
+		}
 	}
 
-	.tasks-calendar__container {
-		display: flex;
-		flex-direction: column;
-		gap: 20px;
-		max-width: 350px;
-		margin: 0 auto;
+	.task__calendar-calendar {
+		border-radius: 20px;
+		border: 1px solid var(--color-base-30);
+		overflow: hidden;
+		width: 100%;
+		background: var(--color-base-00);
 
-		.tasks-calendar__calendar {
-			border-radius: 20px;
-			border: 1px solid var(--color-base-30);
-			overflow: hidden;
-			width: 100%;
-			background: var(--color-base-00);
+		.task__calendar-header {
+			display: flex;
+			align-items: center;
+			height: 40px;
+			border-bottom: 1px solid var(--color-base-30);
 
-			.tasks-calendar__inner-header {
-				display: flex;
-				align-items: center;
+			.calendar__header-month-year-button {
+				font-size: 16px;
+				font-weight: bold;
+				min-width: 180px;
 				height: 40px;
+
+				&.--is-current-month {
+					color: var(--color-accent);
+				}
+			}
+
+			.calendar__header-group-button {
+				display: inherit;
+				align-items: inherit;
+				margin-left: auto;
+
+				.calendar__header-prev-button {}
+
+				.calendar__header-next-button {}
+			}
+		}
+
+		.task__calendar-grid {
+			.calendar__grid-header {
+				display: grid;
+				grid-template-columns: repeat(7, 1fr);
 				border-bottom: 1px solid var(--color-base-30);
 
-				.tasks-calendar__inner-nav-title {
-					font-size: 16px;
+				.week-name {
+					padding: 5px;
+					font-size: 14px;
 					font-weight: bold;
-					min-width: 180px;
-					height: 40px;
+					text-align: center;
+					border-right: 1px solid var(--color-base-30);
 
-					&.--is-current-month {
+					&:last-child {
+						border-right: unset;
+					}
+				}
+			}
+
+			.calendar__grid-body {
+				display: grid;
+				grid-template-columns: repeat(7, 1fr);
+				grid-template-rows: repeat(6, 1fr);
+
+				.week-day {
+					border-radius: unset;
+					height: 40px;
+					position: relative;
+					border-right: 1px solid var(--color-base-30);
+					border-bottom: 1px solid var(--color-base-30);
+
+					&:nth-child(7n + 7) {
+						border-right: unset;
+					}
+
+					&:nth-child(1n + 36) {
+						border-bottom: unset;
+					}
+
+					&.--is-today {
 						color: var(--color-accent);
+						font-weight: bolder;
 					}
 
-					@media (width >= 768px) {
-						&:hover {
-							background-color: var(--color-accent);
-							color: white;
-						}
+					&.--is-other-month {
+						color: color-mix(in srgb, var(--color-base-100), black 50%);
 					}
 
-					@media (width <= 768px) {
-						font-size: 14px;
-					}
-
-					&:active {
-						background-color: color-mix(in srgb, var(--color-accent), white 20%);
-						color: white;
-					}
-				}
-
-				.tasks-calendar__inner-nav-buttons-group {
-					display: flex;
-					align-items: center;
-					margin-left: auto;
-
-					.tasks-calendar__inner-nav-prev-button {
-						width: 40px;
-						height: 40px;
-
-						svg {
-							width: 20px;
-							height: 20px;
-						}
-
-						@media (width >= 768px) {
-							&:hover {
-								background-color: var(--color-accent);
-								color: white;
-							}
-						}
-
-						&:active {
-							background-color: color-mix(in srgb, var(--color-accent), white 20%);
-							color: white;
-						}
-					}
-
-					.tasks-calendar__inner-nav-next-button {
-						width: 40px;
-						height: 40px;
-
-						svg {
-							width: 20px;
-							height: 20px;
-						}
-
-						@media (width >= 768px) {
-							&:hover {
-								background-color: var(--color-accent);
-								color: white;
-							}
-						}
-
-						&:active {
-							background-color: color-mix(in srgb, var(--color-accent), white 20%);
-							color: white;
-						}
-					}
-				}
-			}
-
-			.tasks-calendar__inner-calendar {
-				.tasks-calendar__inner-grid {
-					width: 100%;
-
-					.tasks-calendar__grid-header {
-						display: grid;
-						grid-template-columns: repeat(7, 1fr);
-						border-bottom: 1px solid var(--color-base-30);
-
-						.tasks-calendar__grid-week-name {
-							padding: 5px;
-							font-size: 14px;
-							font-weight: bold;
-							text-align: center;
-							border-right: 1px solid var(--color-base-30);
-
-							&:last-child {
-								border-right: unset;
-							}
-						}
-					}
-
-					.tasks-calendar__grid-week-numbers {
-						display: grid;
-						grid-template-columns: repeat(7, 1fr);
-						grid-template-rows: repeat(5, 1fr);
-
-						.tasks-calendar__grid-week-day {
-							border-radius: unset;
-							height: 40px;
-							position: relative;
-							border-right: 1px solid var(--color-base-30);
-							border-bottom: 1px solid var(--color-base-30);
-
-							&:nth-child(7n + 7) {
-								border-right: unset;
-							}
-
-							&:nth-child(1n + 36) {
-								border-bottom: unset;
-							}
-
-							&.--is-today {
-								color: var(--color-accent);
-								font-weight: bolder;
-							}
-
-							&.--is-other-month {
-								color: color-mix(in srgb, var(--color-base-100), black 50%);
-							}
-
-							&.--is-focused {
-								background-color: var(--color-accent);
-								color: white;
-							}
-
-							.tasks-calendar__grid-week-day--dot {
-								position: absolute;
-								top: 5px;
-								right: 5px;
-								width: 5px;
-								height: 5px;
-								background-color: var(--color-red);
-								border-radius: 50%;
-							}
-
-							@media (width >= 768px) {
-								&:hover {
-									background-color: var(--color-accent);
-									color: white;
-								}
-							}
-
-							&:active {
-								background-color: color-mix(in srgb, var(--color-accent), white 20%);
-							}
-						}
-					}
-				}
-			}
-		}
-
-		.tasks-calendar__tasks {
-			width: 100%;
-
-			.tasks-calendar__tasks-tasks {
-				overflow-wrap: break-word;
-
-				.block-language-tasks {
-					.contains-task-list {
-						display: flex;
-						flex-direction: column;
-						gap: 10px 0;
-						margin-top: 10px;
-
-						&:first-child {
-							margin-top: 0;
-							padding-inline-start: 0;
-
-							> .task-list-item {
-								.task-list-item-checkbox {
-									margin-inline-start: 0;
-								}
-							}
-						}
-					}
-				}
-			}
-
-			.tasks-calendar__actions {
-				margin-bottom: 20px;
-				position: relative;
-
-				.action-input {
-					width: 100%;
-					height: 40px;
-					padding-right: 45px;
-				}
-
-				.action-create {
-					position: absolute;
-					top: 0;
-					right: 0;
-					width: 40px;
-					height: 40px;
-
-					svg {
-						width: 20px;
-						height: 20px;
-					}
-
-					@media (width >= 768px) {
-						&:not(:disabled):hover {
-							background-color: var(--color-accent);
-							color: white;
-						}
-					}
-
-					&:not(:disabled):active {
-						background-color: color-mix(in srgb, var(--color-accent), white 20%);
+					&.--is-focused {
+						background-color: var(--color-accent);
 						color: white;
 					}
 
-					&:disabled {
-						opacity: 0.4;
-						cursor: default;
+					.week-day--dot {
+						position: absolute;
+						top: 5px;
+						right: 5px;
+						width: 5px;
+						height: 5px;
+						border-radius: 50%;
+						background-color: var(--color-red);
 					}
 				}
 			}
 		}
 	}
 
-	.tasks-calendar__loading {
-		width: 100%;
+	/* Строка создания задачи: поле во всю ширину, кнопка справа. */
+	.task__calendar-create {
 		display: flex;
-		justify-content: center;
 		align-items: center;
-		gap: 0 10px;
+		gap: 0 5px;
+		margin-top: 15px;
+
+		.task__calendar-create-input {
+			flex: 1;
+			min-width: 0;
+			height: 40px;
+			border-radius: 20px;
+			border: 1px solid var(--color-base-30);
+			background: var(--color-base-00);
+			padding: 0 15px;
+		}
+
+		.task__calendar-create-button {
+			flex-shrink: 0;
+
+			&:disabled {
+				opacity: 0.4;
+				cursor: default;
+				background-color: transparent;
+			}
+		}
+	}
+
+	.task__calendar-tasks {
+		.tasks__divider {
+			display: flex;
+			align-items: center;
+			gap: 0 10px;
+			margin-top: 15px;
+			font-size: 14px;
+			color: color-mix(in srgb, var(--color-base-100), transparent 40%);
+
+			&::before,
+			&::after {
+				content: '';
+				flex: 1;
+				height: 6px;
+				background-color: currentColor;
+				-webkit-mask: var(--task__calendar-wave) repeat-x center / 16px 6px;
+				mask: var(--task__calendar-wave) repeat-x center / 16px 6px;
+			}
+		}
+
+		.tasks__item {
+			border: 1px solid  var(--color-base-30);
+			border-radius: 20px;
+			overflow: hidden;
+			margin-top: 15px;
+			position: relative;
+			min-height: 40px;
+
+			.tasks__item-link-button {
+				position: absolute;
+				top: 0;
+				right: 0;
+				z-index: 10;
+			}
+
+			.tasks__item-body {
+				-webkit-user-select: text;
+				user-select: text;
+			}
+
+			&.--is-done {
+				.tasks__item-title {
+					text-decoration: line-through;
+					color: color-mix(in srgb, var(--color-base-100), transparent 40%);
+				}
+			}
+
+			/*
+			 * Списки тела верстаются теми же метриками, что и сама заметка: шаг
+			 * вложенности, зазор между пунктами и направляющие берутся из
+			 * переменных Obsidian, поэтому при любой теме и любом размере шрифта
+			 * карточка выглядит как заметка. Значения по умолчанию: шаг 2em
+			 * (32px при шрифте 16px), зазор 0.075rem, направляющая 1px.
+			 */
+			.tasks__item-body {
+				/*
+				 * markdown-preview-view тянет за собой поля страницы: собственный
+				 * padding, ширину строки и отступ сверху у первого блока. В узкой
+				 * карточке это лишнее - гасим, оставляя свои отступы.
+				 */
+				padding: 8px 40px 8px 6px !important;
+				max-width: none;
+				overflow-wrap: anywhere;
+
+				/*
+				 * Направляющие вложенности - как в заметке: псевдоэлемент на
+				 * вложенном списке, вынесенный левее его текста в колонку маркера.
+				 * Линия встаёт ровно под чекбоксом, точкой или цифрой родителя и
+				 * тянется на всю высоту вложенного блока.
+				 *
+				 * Псевдоэлемент, а не border-left: рамка легла бы по левому краю
+				 * списка, то есть под текстом родителя, а не под его маркером, и
+				 * вдобавок съедала бы отступ.
+				 *
+				 * Единственная ручка - сдвиг влево: середина колонки маркера при
+				 * чекбоксе 16px. Маркер у списков рисует тема, так что если линия
+				 * не попала под него - крутить надо здесь.
+				 */
+				--task__calendar-guide-shift: calc(var(--checkbox-size, 1em) / 2 + 0.4em);
+
+				li > ul,
+				li > ol {
+					position: relative;
+				}
+
+				li > ul::before,
+				li > ol::before {
+					content: '';
+					position: absolute;
+					top: 0;
+					bottom: 0;
+					right: calc(100% + var(--task__calendar-guide-shift));
+					border-left: var(--indentation-guide-width, 1px) solid
+						var(--indentation-guide-color, var(--color-base-30));
+				}
+			}
+		}
 	}
 }

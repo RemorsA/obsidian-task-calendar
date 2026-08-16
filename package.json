@@ -1,11 +1,14 @@
 {
-	"name": "tasks-plugin-calendar",
-	"version": "0.2.0",
-	"description": "Displaying the tasks plugin as a calendar",
+	"name": "task-calendar",
+	"version": "2.0.0",
+	"description": "Creating and viewing tasks via the calendar.",
 	"main": "main.js",
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
 		"build": "./node_modules/.bin/tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+		"test": "./node_modules/.bin/vitest run",
+		"test:watch": "./node_modules/.bin/vitest",
+		"typecheck": "./node_modules/.bin/tsc -noEmit -skipLibCheck",
 		"version": "node version-bump.mjs && git add manifest.json versions.json"
 	},
 	"keywords": [],
@@ -15,13 +18,19 @@
 		"@types/node": "^16.11.6",
 		"@typescript-eslint/eslint-plugin": "5.29.0",
 		"@typescript-eslint/parser": "5.29.0",
+		"@vitejs/plugin-vue": "^5.2.4",
 		"@vue/compiler-sfc": "^3.5.26",
+		"@vue/test-utils": "^2.4.11",
 		"builtin-modules": "3.3.0",
 		"esbuild": "0.17.3",
 		"esbuild-plugin-vue3": "^0.5.1",
+		"jsdom": "^25.0.1",
+		"moment": "^2.30.1",
 		"obsidian": "latest",
 		"tslib": "2.4.0",
-		"typescript": "4.7.4"
+		"typescript": "4.7.4",
+		"vite": "^5.4.21",
+		"vitest": "^2.1.9"
 	},
 	"dependencies": {
 		"vue": "^3.5.26"
