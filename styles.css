@@ -1,7 +1,5 @@
 .task__calendar-container {
 	min-width: 300px;
-	/* Один период волны: маска для разделителя «Выполнено». */
-	--task__calendar-wave: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='6' viewBox='0 0 16 6'%3E%3Cpath d='M0 3q4-3 8 0t8 0' fill='none' stroke='%23000' stroke-width='1.5'/%3E%3C/svg%3E");
 
 	@media (width <= 768px) {
 		padding-bottom: 40px;
@@ -168,26 +166,12 @@
 		}
 	}
 
+	/*
+	 * Список задач идёт одним порядком, без разделителей: сначала просроченные,
+	 * потом задачи выбранного дня, в конце закрытые. Группы различаются видом
+	 * самих карточек - рамкой у просроченной и перечёркнутым текстом у закрытой.
+	 */
 	.task__calendar-tasks {
-		.tasks__divider {
-			display: flex;
-			align-items: center;
-			gap: 0 10px;
-			margin-top: 15px;
-			font-size: 14px;
-			color: color-mix(in srgb, var(--color-base-100), transparent 40%);
-
-			&::before,
-			&::after {
-				content: '';
-				flex: 1;
-				height: 6px;
-				background-color: currentColor;
-				-webkit-mask: var(--task__calendar-wave) repeat-x center / 16px 6px;
-				mask: var(--task__calendar-wave) repeat-x center / 16px 6px;
-			}
-		}
-
 		.tasks__item {
 			border: 1px solid  var(--color-base-30);
 			border-radius: 20px;
@@ -206,6 +190,11 @@
 			.tasks__item-body {
 				-webkit-user-select: text;
 				user-select: text;
+			}
+
+			/* Просроченная отличается только рамкой: подписи дня на карточке нет. */
+			&.--is-overdue {
+				border-color: color-mix(in srgb, var(--color-red), transparent 60%);
 			}
 
 			&.--is-done {

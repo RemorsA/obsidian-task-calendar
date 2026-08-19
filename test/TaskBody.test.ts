@@ -49,6 +49,19 @@ describe('TaskBody', () => {
 		expect(wrapper.emitted('toggle-checkbox')).toEqual([[2]]);
 	});
 
+	it('сам чекбокс компонент не переключает - состояние задаёт текст заметки', async () => {
+		const { wrapper } = await mountBody();
+		const box = wrapper.findAll('input.task-list-item-checkbox')[0];
+
+		expect((box.element as HTMLInputElement).checked).toBe(false);
+
+		await box.trigger('click');
+
+		// Дай браузеру переключить галочку сам - и разметка разъедется с файлом:
+		// перерисовки при том же markdown не будет, и галочка останется стоять.
+		expect((box.element as HTMLInputElement).checked).toBe(false);
+	});
+
 	it('клик мимо чекбокса ничего не отдаёт', async () => {
 		const { wrapper } = await mountBody();
 

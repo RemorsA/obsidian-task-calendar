@@ -113,6 +113,15 @@ const handleClick = (event: MouseEvent): void => {
 	// Средний клик по чекбоксу отметкой не считается.
 	if (event.type !== 'click' || !target.matches(CHECKBOX_SELECTOR)) return;
 
+	/*
+	 * Браузер переключил бы галочку сам, и разметка разъехалась бы с файлом:
+	 * состояние чекбокса задаёт только текст заметки. Заметнее всего это было на
+	 * просроченных - закрытие дня сбрасывает галочки в файле, а разметка у
+	 * следующего долга та же самая, поэтому перерисовки не случалось и галочка
+	 * оставалась стоять. Владелец обновляет `markdown` сразу после записи.
+	 */
+	event.preventDefault();
+
 	const index = [...element.querySelectorAll(CHECKBOX_SELECTOR)].indexOf(target);
 
 	if (index !== -1) emit('toggle-checkbox', index);

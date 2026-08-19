@@ -91,14 +91,22 @@
 		</form>
 
 		<div class="task__calendar-tasks">
+			<!--
+				Список идёт одним порядком, без разделителей: сначала просроченные,
+				потом задачи выбранного дня, в конце закрытые.
+
+				Просроченные - только на сегодняшнем дне: они здесь, чтобы о долге не
+				забыть, а не чтобы висеть в каждой дате. Отличает их рамка, а закрывает
+				карточка свой пропущенный день, а не сегодняшнее число.
+			-->
 			<div
-				v-for="task in selectedTasks"
-				:key="task.link"
-				class="tasks__item"
+				v-for="task in overdueTasks"
+				:key="`overdue-${task.link}`"
+				class="tasks__item --is-overdue"
 			>
 				<button
 					class="task__calendar-default-button tasks__item-link-button"
-					aria-label="Открыть или редактировать заметку"
+					aria-label="Перейти на задачу"
 					@click="handleClickTaskLink(task)"
 				>
 					<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 1024 1024"><!-- Icon from Element Plus by Element Plus - https://github.com/element-plus/element-plus-icons/blob/main/packages/svg/package.json --><path fill="currentColor" d="m715.6 625.2l-45.2-45.3l90.5-90.6c75-74.9 85.1-186.3 22.7-248.9c-62.6-62.4-174-52.3-249 22.7l-90.4 90.5l-45.3-45.2l90.5-90.5c100-100 252-110.1 339.5-22.7c87.5 87.5 77.3 239.4-22.7 339.5l-90.5 90.5zm-90.4 90.4l-90.5 90.5c-100 100-252 110.1-339.5 22.7c-87.5-87.5-77.3-239.4 22.7-339.5l90.5-90.5l45.2 45.3l-90.5 90.6c-75 74.9-85.1 186.3-22.7 248.9c62.6 62.4 174 52.3 249-22.7l90.5-90.5zm0-362l45.2 45.2l-271.6 271.6l-45.2-45.2z"/></svg>
@@ -114,16 +122,35 @@
 			</div>
 
 			<div
-				v-if="completedTasks.length"
-				class="tasks__divider"
+				v-for="task in selectedTasks"
+				:key="task.link"
+				class="tasks__item"
 			>
-				Выполнено
+				<button
+					class="task__calendar-default-button tasks__item-link-button"
+					aria-label="Перейти на задачу"
+					@click="handleClickTaskLink(task)"
+				>
+					<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 1024 1024"><!-- Icon from Element Plus by Element Plus - https://github.com/element-plus/element-plus-icons/blob/main/packages/svg/package.json --><path fill="currentColor" d="m715.6 625.2l-45.2-45.3l90.5-90.6c75-74.9 85.1-186.3 22.7-248.9c-62.6-62.4-174-52.3-249 22.7l-90.4 90.5l-45.3-45.2l90.5-90.5c100-100 252-110.1 339.5-22.7c87.5 87.5 77.3 239.4-22.7 339.5l-90.5 90.5zm-90.4 90.4l-90.5 90.5c-100 100-252 110.1-339.5 22.7c-87.5-87.5-77.3-239.4 22.7-339.5l90.5-90.5l45.2 45.3l-90.5 90.6c-75 74.9-85.1 186.3-22.7 248.9c62.6 62.4 174 52.3 249-22.7l90.5-90.5zm0-362l45.2 45.2l-271.6 271.6l-45.2-45.2z"/></svg>
+				</button>
+
+				<TaskBody
+					v-if="task.body"
+					:app="props.plugin.app"
+					:markdown="task.body"
+					:source-path="task.link"
+					@toggle-checkbox="handleToggleSubtask(task, $event)"
+				/>
 			</div>
 
 			<!--
-				Закрытые в этот день - в конце списка. Тело показывается вместе с
-				ними: снять галочку с чекбокса - единственный способ вернуть задачу
-				в работу, кнопки отмены больше нет.
+				Закрытые в этот день - в конце списка, одной строкой: чекбоксы тела
+				при закрытии сброшены, отмечать в нём нечего, и от задачи остаётся
+				текст только первого - родительского - чекбокса.
+
+				Сам чекбокс отмечен по журналу «Выполнено», а не по телу, и он же
+				кнопка отмены: клик убирает день из журнала. Разметка та же, что у
+				рендера тела, чтобы чекбокс выглядел ровно как в самой задаче.
 			-->
 			<div
 				v-for="task in completedTasks"
@@ -132,19 +159,30 @@
 			>
 				<button
 					class="task__calendar-default-button tasks__item-link-button"
-					aria-label="Открыть или редактировать заметку"
+					aria-label="Перейти на задачу"
 					@click="handleClickTaskLink(task)"
 				>
 					<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 1024 1024"><!-- Icon from Element Plus by Element Plus - https://github.com/element-plus/element-plus-icons/blob/main/packages/svg/package.json --><path fill="currentColor" d="m715.6 625.2l-45.2-45.3l90.5-90.6c75-74.9 85.1-186.3 22.7-248.9c-62.6-62.4-174-52.3-249 22.7l-90.4 90.5l-45.3-45.2l90.5-90.5c100-100 252-110.1 339.5-22.7c87.5 87.5 77.3 239.4-22.7 339.5l-90.5 90.5zm-90.4 90.4l-90.5 90.5c-100 100-252 110.1-339.5 22.7c-87.5-87.5-77.3-239.4 22.7-339.5l90.5-90.5l45.2 45.3l-90.5 90.6c-75 74.9-85.1 186.3-22.7 248.9c62.6 62.4 174 52.3 249-22.7l90.5-90.5zm0-362l45.2 45.2l-271.6 271.6l-45.2-45.2z"/></svg>
 				</button>
 
-				<TaskBody
-					v-if="task.body"
-					:app="props.plugin.app"
-					:markdown="task.body"
-					:source-path="task.link"
-					@toggle-checkbox="handleToggleSubtask(task, $event)"
-				/>
+				<div class="tasks__item-body markdown-preview-view markdown-rendered">
+					<ul class="contains-task-list">
+						<li
+							class="task-list-item is-checked"
+							data-task="x"
+						>
+							<input
+								class="task-list-item-checkbox"
+								type="checkbox"
+								checked
+								aria-label="Отменить выполнение"
+								@click.prevent="handleCancelTask(task)"
+							>
+
+							<span class="tasks__item-title">{{ task.title }}</span>
+						</li>
+					</ul>
+				</div>
 			</div>
 		</div>
 	</div>
@@ -156,22 +194,22 @@ import type TaskCalendarPlugin from '../TaskCalendarPlugin';
 import { Notice, TAbstractFile, TFile, debounce, moment } from 'obsidian';
 import TaskBody from './TaskBody.vue';
 import {
-	appendBodyBlock,
-	bodyBlockDates,
 	buildTaskNote,
+	clearBodyChecks,
+	collapseBodyBlocks,
 	DATE_FORMAT,
 	extractBody,
-	extractDayLists,
+	extractLists,
 	FIELD,
-	hasDayCheckboxes,
-	isDayComplete,
+	firstCheckboxText,
+	firstPendingUpTo,
+	hasCheckboxes,
+	isBodyComplete,
 	isDoneOn,
 	pendingDays,
 	getDoneTasksForDate,
+	getOverdueTasks,
 	getTasksForDate,
-	hasBodyBlocks,
-	labelBodyBlock,
-	nextOccurrenceAfter,
 	normalizeDate,
 	readTaskNote,
 	SelectedTask,
@@ -195,7 +233,12 @@ const currentDate = shallowRef(moment());
 const taskNotes = shallowRef<TaskNote[]>([]);
 /** Задачи выбранного дня: наименование, путь до файла и текст после свойств. */
 const selectedTasks = ref<SelectedTask[]>([]);
-/** Закрытые в выбранный день - хвост списка, вместе с телом. */
+/**
+ * Просроченные - с незакрытым днём в прошлом. Показываются только на сегодняшнем
+ * дне, над задачами дня: это напоминание о долге, а не содержимое даты.
+ */
+const overdueTasks = ref<SelectedTask[]>([]);
+/** Закрытые в выбранный день - хвост списка, одной строкой. */
 const completedTasks = ref<SelectedTask[]>([]);
 const isLoading = ref(false);
 const selectedDate = ref<string>('');
@@ -332,8 +375,8 @@ const taskNameInput = ref<HTMLInputElement | null>(null);
  * Создать задачу на выбранный день.
  *
  * Имя файла - «дата - название», свойства заполнены по шаблону, в теле один
- * снятый чекбокс с названием. Заметка **не открывается**: создание идёт пачкой,
- * и уезжать из календаря после каждой задачи неудобно.
+ * снятый чекбокс с названием. Созданная заметка **сразу открывается на правку**:
+ * шаблон это только заготовка, дальше в неё вписывают подзадачи и повтор.
  *
  * Заметка с таким именем уже есть - ничего не перезаписываем и не открываем,
  * только говорим об этом: задачу с этим названием на этот день уже заводили.
@@ -367,7 +410,13 @@ const handleCreateTask = async (): Promise<void> => {
 	} catch (error) {
 		console.error(`${path}:`, error);
 		new Notice('Не удалось создать задачу');
+
+		return;
 	}
+
+	// Открытие - отдельно от создания: заметка уже есть, и не открывшаяся вкладка
+	// не повод говорить, что задачу не создали.
+	await openNote(path, true);
 };
 
 const handleClickTaskLink = async (task: SelectedTask): Promise<void> => {
@@ -375,11 +424,11 @@ const handleClickTaskLink = async (task: SelectedTask): Promise<void> => {
 };
 
 /**
- * Привести журнал закрытий в соответствие с чекбоксами дня.
+ * Записать или снять день в журнале «Выполнено».
  *
- * Кнопок «выполнить» и «отменить» нет: задача закрыта тогда, когда отмечены все
- * её чекбоксы, и открыта, как только снят любой. Поэтому после каждой галочки
- * день либо дописывается в «Выполнено», либо убирается оттуда.
+ * Журнал - единственное место, где живёт выполнение: по нему календарь и решает,
+ * закрыта задача на выбранную дату или нет. День дописывается, когда отмечены все
+ * чекбоксы тела, и убирается по отмене из хвоста «Выполнено».
  *
  * Сравнение через normalizeDate: в свойстве день мог быть записан объектом Date
  * или с временем, и построчное сравнение промахнулось бы.
@@ -416,34 +465,92 @@ const syncDoneForDay = async (note: TaskNote, day: string, complete: boolean): P
 };
 
 /**
+ * Снять все галочки в теле заметки. Отдаёт `true`, если тело после этого чистое.
+ *
+ * Тело задачи это черновик одного захода: закрыли день - он ушёл в «Выполнено», а
+ * чекбоксы освободились под следующий раз. Убрали день из журнала - сбрасываются
+ * тоже, даже если часть галочек стояла: состояние задаёт журнал, а не тело.
+ *
+ * Читаем свежий текст, а не `cachedRead`: дальше по нему пишем, а заметку могли
+ * поменять в редакторе.
+ *
+ * Успех возвращается, потому что от него зависит запись журнала: остались бы
+ * отмеченные чекбоксы при тронутом журнале - следующий скан снова счёл бы задачу
+ * выполненной и закрыл ещё один день, и так до конца череды.
+ */
+const clearChecksInFile = async (note: TaskNote): Promise<boolean> => {
+	const file = taskFiles.get(note.link);
+	if (!file) return false;
+
+	const { vault } = props.plugin.app;
+
+	try {
+		const content = await vault.read(file);
+		// Заодно сворачиваем старые блоки `## дата`: пишем в тело всё равно, а
+		// показан в карточке свёрнутый набор - пусть и в файле будет он же.
+		const collapsed = collapseBodyBlocks(content) ?? content;
+		const updated = clearBodyChecks(collapsed) ?? collapsed;
+
+		// Ничего не изменилось - файл не трогаем, иначе каждый скан бил бы в диск.
+		if (updated !== content) await vault.modify(file, updated);
+	} catch (error) {
+		console.error(`${note.link}:`, error);
+		new Notice('Не удалось сбросить подзадачи');
+
+		return false;
+	}
+
+	return true;
+};
+
+/**
  * Галочка подзадачи в теле заметки. Правится ровно одна строка файла, поэтому
  * читаем свежий текст, а не `cachedRead`: между отрисовкой и кликом заметку
  * могли поменять в редакторе.
+ *
+ * Отмечены все - день карточки уходит в «Выполнено», а чекбоксы сбрасываются
+ * тем же письмом: набор в теле один, и следующему разу он нужен чистым. День
+ * берётся у карточки, а не из выбранной даты: у просроченной это её пропущенный
+ * день.
+ *
+ * Снятая галочка из журнала ничего не убирает: закрытый день в списке
+ * невыполненных не показывается, отменяют его кликом по хвосту «Выполнено».
  */
 const handleToggleSubtask = async (task: SelectedTask, index: number): Promise<void> => {
 	const file = taskFiles.get(task.link);
 	const note = taskNotes.value.find((item) => item.link === task.link);
-	const day = selectedDate.value;
+	const day = task.date;
 	if (!file || !note || !day) return;
 
 	const { vault } = props.plugin.app;
-	let updated: string;
+	let complete = false;
 
 	try {
 		const content = await vault.read(file);
-		// Блок под этот день заводится по первой же галочке, а не при открытии
-		// дня: иначе хождение по календарю засыпало бы заметку пустыми блоками.
-		// Показан был чистый шаблон последней итерации - в него и пишем.
-		const prepared = hasBodyBlocks(content)
-			? appendBodyBlock(content, day) ?? content
-			: content;
-		const toggled = toggleBodyCheckbox(prepared, index, day);
+		// Заметка со старыми блоками `## дата` сворачивается перед правкой: в
+		// карточке показан свёрнутый набор, по нему и считаются номера чекбоксов.
+		const prepared = collapseBodyBlocks(content) ?? content;
+		const toggled = toggleBodyCheckbox(prepared, index);
 
 		// Чекбокса с таким номером в файле нет - писать нечего.
 		if (toggled === null) return;
 
-		updated = toggled;
+		complete = isBodyComplete(extractBody(toggled));
+
+		const updated = complete ? clearBodyChecks(toggled) ?? toggled : toggled;
+
 		await vault.modify(file, updated);
+
+		/*
+		 * Разметку карточки обновляем сразу, не дожидаясь пересчёта: галочку
+		 * ставит не браузер, а текст заметки (см. `preventDefault` в TaskBody), и
+		 * без этого до конца debounce карточка стояла бы в прежнем виде.
+		 *
+		 * Заодно снимается старая беда просроченных: после закрытия дня галочки в
+		 * файле сброшены, но у следующего долга разметка ровно та же, перерисовки
+		 * не случалось - и галочка оставалась стоять до второго клика.
+		 */
+		task.body = extractLists(extractBody(updated));
 	} catch (error) {
 		console.error(`${task.link}:`, error);
 		new Notice('Не удалось отметить подзадачу');
@@ -451,65 +558,49 @@ const handleToggleSubtask = async (task: SelectedTask, index: number): Promise<v
 		return;
 	}
 
-	// Отмечены все чекбоксы дня - задача этого дня сделана, иначе снова открыта.
-	const complete = isDayComplete(extractBody(updated), day);
-
-	await syncDoneForDay(note, day, complete);
-
-	// Закрыли повторяющуюся - следующему повтору нужен свой набор чекбоксов.
-	if (complete && note.repeat) await splitBodyByDay(note, day);
+	if (complete) await syncDoneForDay(note, day, true);
 };
 
 /**
- * Разложить чекбоксы тела по дням повтора после закрытия дня.
+ * Отменить выполнение закрытой задачи - клик по её отмеченному чекбоксу.
  *
- * Закрытый день забирает себе текущий набор чекбоксов (появляется заголовок
- * `## дата`), а под следующий повтор дописывается его копия со снятыми
- * галочками. Так у каждой итерации свой набор, и прошлые отметки не стираются.
+ * Снять галочку в теле больше нельзя: при закрытии дня чекбоксы сбрасываются, и
+ * тело о выполнении ничего не знает. Поэтому день убирается из журнала, а тело
+ * приводится к чистому виду - на случай, если галочки успели наставить снова.
  *
- * Пишем в тело, поэтому читаем свежий файл: между отрисовкой и кликом заметку
- * могли поменять в редакторе.
+ * Сначала тело, потом журнал: не вышло сбросить - лучше оставить всё как было,
+ * чем открыть день с полностью отмеченным телом. Иначе следующий же скан счёл бы
+ * задачу выполненной и закрыл день обратно.
  */
-const splitBodyByDay = async (note: TaskNote, day: string): Promise<void> => {
-	const file = taskFiles.get(note.link);
-	if (!file) return;
+const handleCancelTask = async (task: SelectedTask): Promise<void> => {
+	const note = taskNotes.value.find((item) => item.link === task.link);
+	if (!note) return;
 
-	try {
-		const content = await vaultRead(file);
-		// Помечаем датой только заметку без блоков: у заметки с блоками свободные
-		// строки могут быть просто вступлением, и утаскивать их в блок нельзя.
-		const labeled = hasBodyBlocks(content)
-			? content
-			: labelBodyBlock(content, day) ?? content;
-		const next = nextOccurrenceAfter(note, day);
-		const updated = (next ? appendBodyBlock(labeled, next) : null) ?? labeled;
+	if (!await clearChecksInFile(note)) return;
 
-		// Чекбоксов в теле нет - раскладывать нечего, файл не трогаем.
-		if (updated !== content) await props.plugin.app.vault.modify(file, updated);
-	} catch (error) {
-		console.error(`${note.link}:`, error);
-		new Notice('Не удалось разложить подзадачи по дням');
-	}
+	await syncDoneForDay(note, task.date, false);
 };
 
 /**
- * Сверить журнал закрытий с чекбоксами тела.
+ * Закрыть задачу по отметке в самой заметке.
  *
- * Отмечать задачу можно не только из календаря, но и в самой заметке - руками в
- * редакторе или на другом устройстве. Поэтому после каждого пересчёта тело
- * читается заново, и «Выполнено» приводится к тому, что в нём стоит.
+ * Отмечать можно не только из календаря: галочки ставят руками в редакторе или
+ * они прилетают синхронизацией с другого устройства. Поэтому после каждого
+ * пересчёта тело читается заново, и полностью отмеченное закрывает свой день.
  *
- * Какие дни сверяются:
- * - есть блоки итераций - каждый по своей дате, у повтора это ровно то, что
- *   нужно: закрыт тот день, чей блок отмечен целиком;
- * - блоков нет - чекбоксы относятся к «Дате» задачи, другого дня у них просто
- *   нет.
+ * Своей даты у чекбоксов больше нет - блоки итераций не заводятся. Закрывается
+ * **самый ранний непокрытый день, не позже сегодня**: в заметке отмечают то, что
+ * уже сделали, и старый долг закрывается раньше свежего. Будущий день так не
+ * закрыть - для этого есть клик по нему в календаре.
  *
- * День **без чекбоксов пропускается**: «отмечать нечем» это не «не выполнено».
- * Иначе задача без чекбоксов теряла бы дату, вписанную в «Выполнено» руками.
+ * Тело **без чекбоксов пропускается**: «отмечать нечем» это не «выполнено».
+ * Иначе задача без чекбоксов получала бы закрытие на пустом месте.
  *
  * Задачу на паузе («Стоп повтор») не трогаем: пауза на то и пауза, чтобы плагин
  * в неё не лез.
+ *
+ * Зацикливания нет: своя же запись поднимает `modify` и новый скан, но чекбоксы
+ * к тому времени сброшены, и второй проход ничего не находит.
  */
 const syncDoneFromBody = async (note: TaskNote): Promise<void> => {
 	const file = taskFiles.get(note.link);
@@ -518,30 +609,32 @@ const syncDoneFromBody = async (note: TaskNote): Promise<void> => {
 	let body: string;
 
 	try {
-		body = extractBody(await props.plugin.app.vault.cachedRead(file));
+		const content = await props.plugin.app.vault.cachedRead(file);
+
+		// Старые блоки `## дата` в счёт не идут: считаем по свёрнутому набору,
+		// иначе «отмечены все» никогда не сойдётся - прошлые дни тянут за собой
+		// свои галочки.
+		body = extractBody(collapseBodyBlocks(content) ?? content);
 	} catch (error) {
 		console.error(`${note.link}:`, error);
 
 		return;
 	}
 
-	const days = bodyBlockDates(body);
-	if (days.length === 0 && note.date) days.push(note.date);
+	if (!hasCheckboxes(body) || !isBodyComplete(body)) return;
 
-	for (const day of days) {
-		if (!hasDayCheckboxes(body, day)) continue;
+	const day = firstPendingUpTo(note, todayStr.value);
 
-		const complete = isDayComplete(body, day);
+	// Закрывать нечего: всё до сегодня уже в журнале, а будущее - не отсюда.
+	if (!day) return;
 
-		await syncDoneForDay(note, day, complete);
+	// Сначала тело, потом журнал: не вышло сбросить чекбоксы - день не закрываем.
+	// Иначе следующий скан снова увидел бы отмеченное тело и закрыл ещё один
+	// день, и так до конца череды повторов.
+	if (!await clearChecksInFile(note)) return;
 
-		// Закрыли повтор из заметки - следующему повтору нужен свой набор.
-		if (complete && note.repeat) await splitBodyByDay(note, day);
-	}
+	await syncDoneForDay(note, day, true);
 };
-
-/** Свежее содержимое файла - не из кэша: дальше по нему пишем. */
-const vaultRead = (file: TFile): Promise<string> => props.plugin.app.vault.read(file);
 
 /** Файлы задач по пути - чтобы дочитывать тело только для выбранного дня. */
 const taskFiles = new Map<string, TFile>();
@@ -571,43 +664,61 @@ let selectionToken = 0;
  * Задачи выбранного дня. Свойства уже разобраны при скане, здесь дочитывается
  * только тело - текст после блока свойств.
  *
- * Закрытые в этот день собираются заодно и тоже с телом: снять галочку - теперь
- * единственный способ вернуть задачу в работу.
+ * Три списка сразу: просроченные над днём, задачи дня и закрытые в этот день.
+ * Тело читается всем троим одним и тем же способом - закрытой оно нужно, чтобы
+ * взять текст родительского чекбокса для подписи.
  */
 const loadSelectedTasks = async (date: string): Promise<void> => {
 	const token = ++selectionToken;
 	const { vault } = props.plugin.app;
 	const notes = getTasksForDate(taskNotes.value, date);
 
+	// Просроченные - только на сегодняшнем дне: карточка напоминает о долге, а не
+	// рассказывает, что было в выбранной дате.
+	const missed = date === todayStr.value ? getOverdueTasks(taskNotes.value, date) : [];
+
 	/**
-	 * Тело читается и невыполненным, и закрытым: у закрытых по нему снимают
-	 * галочку, чтобы вернуть задачу в работу.
+	 * Карточка задачи на день: списки тела и текст первого чекбокса.
+	 *
+	 * `day` у просроченной - её пропущенный день, а не выбранная дата: закрывать
+	 * карточка будет именно его.
 	 */
-	const withBody = async (note: TaskNote): Promise<SelectedTask> => {
+	const withBody = async (note: TaskNote, day: string): Promise<SelectedTask> => {
 		const file = taskFiles.get(note.link);
 		let body = '';
+		let title: string | null = null;
 
 		if (file) {
 			try {
+				const content = await vault.cachedRead(file);
+				// Старые блоки `## дата` сворачиваются в один набор: иначе в карточке
+				// показались бы чекбоксы всех дней разом.
+				const text = extractBody(collapseBodyBlocks(content) ?? content);
+
 				// В списке дня показываются только списки заметки - что делать.
 				// Абзацы, заголовки и выноски отбрасываются: за ними в саму заметку.
-				// У повторяющейся задачи с блоками берётся блок этого дня.
-				body = extractDayLists(extractBody(await vault.cachedRead(file)), date);
+				body = extractLists(text);
+				title = firstCheckboxText(text);
 			} catch (error) {
 				console.error(`${note.link}:`, error);
 			}
 		}
 
-		return { task: note.task, link: note.link, body };
+		// Чекбоксов в теле нет - подписываем закрытую наименованием задачи.
+		return { task: note.task, link: note.link, date: day, body, title: title ?? note.task };
 	};
 
-	const tasks = await Promise.all(notes.map(withBody));
-	const completed = await Promise.all(getDoneTasksForDate(taskNotes.value, date).map(withBody));
+	const tasks = await Promise.all(notes.map((note) => withBody(note, date)));
+	const overdue = await Promise.all(missed.map((item) => withBody(item.note, item.date)));
+	const completed = await Promise.all(
+		getDoneTasksForDate(taskNotes.value, date).map((note) => withBody(note, date))
+	);
 
 	// Пока читались тела, пользователь мог кликнуть по другой дате.
 	if (token !== selectionToken) return;
 
 	selectedTasks.value = tasks;
+	overdueTasks.value = overdue;
 	completedTasks.value = completed;
 };
 
@@ -622,6 +733,12 @@ const updateTasks = async () => {
 	taskFiles.clear();
 
 	const scanned = new Set<string>();
+	/**
+	 * Заметки, у которых из «Выполнено» пропал день. Убрать дату руками в
+	 * редакторе - то же, что отменить выполнение: чекбоксы тела сбрасываются, даже
+	 * если часть галочек стояла.
+	 */
+	const uncompleted: TaskNote[] = [];
 
 	for (const file of files) {
 		scanned.add(file.path);
@@ -635,6 +752,13 @@ const updateTasks = async () => {
 		noteCache.set(file.path, entry);
 
 		if (!entry.note) continue;
+
+		// Сравнивать есть с чем только со второго скана: до него журнал не с чем
+		// сверять, и сбрасывать чекбоксы было бы не за что.
+		const before = cached?.note?.done;
+		const after = entry.note.done;
+
+		if (before && before.some((day) => !after.includes(day))) uncompleted.push(entry.note);
 
 		notes.push(entry.note);
 		taskFiles.set(entry.note.link, file);
@@ -668,6 +792,9 @@ const updateTasks = async () => {
 	// Список дня рисуется раньше сверки: на первом скане сверять приходится все
 	// задачи, и при тысяче заметок календарь иначе ждал бы тысячу чтений.
 	await loadSelectedTasks(selectedDate.value);
+
+	for (const note of uncompleted) await clearChecksInFile(note);
+
 	await syncNotes(touched);
 };
 

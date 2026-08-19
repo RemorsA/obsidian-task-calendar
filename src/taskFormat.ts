@@ -33,8 +33,15 @@ import { moment } from 'obsidian';
  * календаря уходит целиком, журнал закрытий остаётся нетронутым.
  *
  * Выполнение задачи считается **по чекбоксам тела**: отмечены все - день
- * дописывается в «Выполнено», сняли любой - день из журнала убирается. Кнопок
- * «выполнить» и «отменить» нет, отметка идёт только через чекбоксы.
+ * дописывается в «Выполнено», а сами чекбоксы сбрасываются. Тело это черновик
+ * одного захода, состояние задачи целиком задаёт журнал.
+ *
+ * Набор чекбоксов в теле **один**, по дням он не размножается: у повторяющейся
+ * задачи все итерации отмечаются в одних и тех же строках. Выполнена задача на
+ * выбранный день или нет - видно по журналу, а не по галочкам.
+ *
+ * Отмена выполнения - убрать день из журнала: чекбоксы при этом тоже
+ * сбрасываются, даже если часть галочек стояла.
  *
  * Здесь собрано всё знание о формате. Остальной код ходит только через
  * функции этого модуля и о YAML-свойствах не знает.
@@ -62,6 +69,13 @@ export interface Repeat {
 	 * Нумерация как у moment: 0 - воскресенье, 6 - суббота.
 	 */
 	weekdays?: number[];
+	/**
+	 * Месяцы для годовых повторов, по возрастанию:
+	 * «каждый год в марте, сентябре» -> [2, 8].
+	 * Нумерация как у moment: 0 - январь, 11 - декабрь. Число месяца берётся из
+	 * свойства «Дата» - другого источника у него нет.
+	 */
+	months?: number[];
 }
 
 export interface TaskNote {
@@ -91,8 +105,20 @@ export interface TaskNote {
 export interface SelectedTask {
 	task: string;
 	link: string;
+	/**
+	 * День, к которому относится карточка. У задач выбранного дня и у закрытых
+	 * это сам выбранный день, у просроченной - её пропущенный день: карточка
+	 * закрывает именно его, а не сегодняшнее число.
+	 */
+	date: string;
 	/** Списки из тела заметки - только они, см. `extractLists`. */
 	body: string;
+	/**
+	 * Текст первого чекбокса тела - им подписана закрытая задача. Остальные
+	 * чекбоксы у неё не показываются: тело сброшено, отмечать в нём нечего.
+	 * Чекбоксов в теле нет - остаётся наименование задачи.
+	 */
+	title: string;
 }
 
 /**
@@ -126,6 +152,26 @@ const WEEKDAY_WORDS: Record<string, number> = {
 	суббота: 6, субботу: 6, субботы: 6,
 };
 
+/**
+ * Месяцы в нумерации moment: 0 - январь, 11 - декабрь. Падежи те же, что нужны
+ * в оговорке «в марте», плюс именительный и родительный - их пишут в короткой
+ * форме «каждый март».
+ */
+const MONTH_WORDS: Record<string, number> = {
+	январь: 0, января: 0, январе: 0,
+	февраль: 1, февраля: 1, феврале: 1,
+	март: 2, марта: 2, марте: 2,
+	апрель: 3, апреля: 3, апреле: 3,
+	май: 4, мая: 4, мае: 4,
+	июнь: 5, июня: 5, июне: 5,
+	июль: 6, июля: 6, июле: 6,
+	август: 7, августа: 7, августе: 7,
+	сентябрь: 8, сентября: 8, сентябре: 8,
+	октябрь: 9, октября: 9, октябре: 9,
+	ноябрь: 10, ноября: 10, ноябре: 10,
+	декабрь: 11, декабря: 11, декабре: 11,
+};
+
 /** «каждый», «каждую», «каждые» - любое окончание. */
 const REPEAT_PREFIX = /^кажд[а-яё]+\s+/;
 /** Число, можно с наращением: «2», «2-й». */
@@ -137,24 +183,31 @@ const WEEKDAY_PREFIX = /^(?:в|во)\s+/;
 const LIST_SEPARATOR = /\s*,\s*/;
 
 /**
- * Разобрать перечисление дней недели. Возвращает номера по возрастанию без
- * повторов; null - если хоть одно слово не день недели.
+ * Разобрать перечисление по словарю: дни недели или месяцы. Возвращает номера
+ * по возрастанию без повторов; null - если хоть одно слово незнакомо.
+ *
+ * Оговорка перечисляется через запятую, и перед каждым словом может стоять своё
+ * «в»: «в субботу, в понедельник».
  */
-const parseWeekdays = (text: string): number[] | null => {
+const parseNumberList = (text: string, words: Record<string, number>): number[] | null => {
 	const parts = text.split(LIST_SEPARATOR)
 		.map((part) => part.replace(WEEKDAY_PREFIX, '').trim())
 		.filter((part) => part !== '');
 
-	const weekdays: number[] = [];
+	const numbers: number[] = [];
 
 	for (const part of parts) {
-		const weekday = WEEKDAY_WORDS[part];
-		if (weekday === undefined) return null;
-		if (!weekdays.includes(weekday)) weekdays.push(weekday);
+		const number = words[part];
+		if (number === undefined) return null;
+		if (!numbers.includes(number)) numbers.push(number);
 	}
 
-	return weekdays.length > 0 ? weekdays.sort((a, b) => a - b) : null;
+	return numbers.length > 0 ? numbers.sort((a, b) => a - b) : null;
 };
+
+const parseWeekdays = (text: string): number[] | null => parseNumberList(text, WEEKDAY_WORDS);
+
+const parseMonths = (text: string): number[] | null => parseNumberList(text, MONTH_WORDS);
 
 /**
  * Разобрать свойство «Повтор». Незнакомая форма - null, задача считается
@@ -167,10 +220,17 @@ const parseWeekdays = (text: string): number[] | null => {
  * - «каждые 2 недели в субботу», «каждую неделю во вторник»;
  * - «каждую неделю в субботу, понедельник» - несколько дней в одном повторе;
  * - «каждую субботу», «каждые 2 субботы» - то же, что неделя с днём недели;
+ * - «каждый год в марте, сентябре» - несколько месяцев в одном повторе;
+ * - «каждый март», «каждые 2 марта» - то же, что год с месяцем;
  * - «ежедневно», «еженедельно», «ежемесячно», «ежегодно».
  *
- * Дни недели имеют смысл только для недельного повтора: «каждый месяц в
- * субботу» не про какую-то определённую субботу, поэтому не принимается.
+ * Оговорка после единицы уточняет **только** свою единицу: дни недели - неделю,
+ * месяцы - год. «Каждый месяц в субботу» не про какую-то определённую субботу, а
+ * «каждую неделю в марте» не про какую-то определённую неделю, и то и другое не
+ * принимается.
+ *
+ * «Каждые 2 марта» - это «каждые 2 года в марте», а не второе марта: числа в
+ * повторе всегда означают шаг, а число месяца берётся из свойства «Дата».
  *
  * Не понимает оговорок вроде «каждый день, кроме выходных» и «по будням» -
  * такие задачи останутся разовыми.
@@ -204,20 +264,33 @@ export const parseRepeat = (value: unknown): Repeat | null => {
 	const unit = units.find((key) => REPEAT_UNIT_WORDS[key].includes(head));
 
 	if (tail !== null) {
-		const weekdays = parseWeekdays(tail);
-
 		// «в субботу» уточняет только неделю: у месяца и года таких суббот много.
-		if (unit !== 'week' || !weekdays) return null;
+		if (unit === 'week') {
+			const weekdays = parseWeekdays(tail);
 
-		return { interval, unit, weekdays };
+			return weekdays ? { interval, unit, weekdays } : null;
+		}
+
+		// «в марте» уточняет только год: внутри месяца или недели марта не бывает.
+		if (unit === 'year') {
+			const months = parseMonths(tail);
+
+			return months ? { interval, unit, months } : null;
+		}
+
+		return null;
 	}
 
 	if (unit) return { interval, unit };
 
 	// «каждую субботу» - та же неделя с днями недели, только короче.
 	const weekdays = parseWeekdays(head);
+	if (weekdays) return { interval, unit: 'week', weekdays };
 
-	return weekdays ? { interval, unit: 'week', weekdays } : null;
+	// «каждый март» - тот же год с месяцами, только короче.
+	const months = parseMonths(head);
+
+	return months ? { interval, unit: 'year', months } : null;
 };
 
 /** Привести значение свойства к YYYY-MM-DD. Мусор и пустота - null. */
@@ -393,10 +466,9 @@ export const extractLists = (body: string): string => {
  * Переключить подзадачу в теле заметки. `index` - порядковый номер чекбокса
  * сверху вниз, ровно как их отрисовал markdown-рендер.
  *
- * `blockDate` сужает счёт до блока этой итерации - иначе галочка из блока
- * второго дня попала бы в строку первого: рендеру отдан только один блок, и
- * нумерация в нём своя. Блока с такой датой нет - считаем по всему телу, как
- * для заметок без блоков.
+ * Набор чекбоксов в теле **один**: по дням он больше не размножается, и день
+ * тут ни при чём. Выполнение живёт в свойстве «Выполнено», а тело - черновик
+ * текущего захода, который сбрасывается при закрытии дня.
  *
  * Возвращает новый текст файла или null, если такого чекбокса нет - тогда
  * писать нечего. Меняется ровно один символ в одной строке: остальной текст,
@@ -405,22 +477,13 @@ export const extractLists = (body: string): string => {
  * Строки внутри блоков кода пропускаются: рендер их чекбоксами не делает, и без
  * пропуска нумерация разъехалась бы - галочка правила бы чужую строку.
  */
-export const toggleBodyCheckbox = (
-	content: string,
-	index: number,
-	blockDate: string | null = null
-): string | null => {
+export const toggleBodyCheckbox = (content: string, index: number): string | null => {
 	const frontmatter = content.match(FRONTMATTER_PATTERN)?.[0] ?? '';
 	const lines = content.slice(frontmatter.length).split('\n');
-	const block = blockDate
-		? parseBodyBlocks(lines).find((item) => item.date === blockDate)
-		: undefined;
-	const from = block ? block.start + 1 : 0;
-	const to = block ? block.end : lines.length - 1;
 	let found = -1;
 	let inFence = false;
 
-	for (let i = from; i <= to; i++) {
+	for (let i = 0; i < lines.length; i++) {
 		if (FENCE_LINE.test(lines[i])) {
 			inFence = !inFence;
 			continue;
@@ -445,8 +508,9 @@ export const toggleBodyCheckbox = (
 /**
  * Заголовок блока итерации в теле задачи: `## 2026-08-13`.
  *
- * У повторяющейся задачи каждый повтор получает свой набор чекбоксов, чтобы
- * отмечаться заново, не стирая прошлые. Набор помечается заголовком с датой.
+ * Блоки больше **не заводятся**: набор чекбоксов у задачи один, а выполнение
+ * живёт в свойстве «Выполнено». Разбор остался ради заметок, заведённых, пока
+ * блоки были - их надо свернуть, см. `collapseBodyBlocks`.
  */
 const BLOCK_HEADING = /^#{1,6}\s+(\d{4}-\d{2}-\d{2})\s*$/;
 
@@ -476,29 +540,69 @@ const parseBodyBlocks = (lines: string[]): BodyBlock[] => {
 	return blocks;
 };
 
-/** Снять галочки со строк-подзадач, остальное оставить как есть. */
-const clearChecks = (lines: string[]): string[] =>
-	lines.map((line) => line.replace(BODY_TASK_LINE, '$1 $3'));
-
-/** Строка списка вне блока кода - то, что показывается под календарём. */
-const collectLists = (lines: string[]): string[] => {
-	const collected: string[] = [];
+/**
+ * Снять галочки со строк-подзадач, остальное оставить как есть.
+ *
+ * Строки внутри блоков кода не трогаются: там чекбокса нет, есть его текст.
+ */
+const clearChecks = (lines: string[]): string[] => {
 	let inFence = false;
 
-	for (const line of lines) {
+	return lines.map((line) => {
 		if (FENCE_LINE.test(line)) {
 			inFence = !inFence;
-			continue;
+
+			return line;
 		}
 
-		if (!inFence && LIST_LINE.test(line)) collected.push(line);
-	}
-
-	return collected;
+		return inFence ? line : line.replace(BODY_TASK_LINE, '$1 $3');
+	});
 };
 
 /**
- * Все чекбоксы отмечены - задача этого дня сделана.
+ * Снять все галочки в теле заметки. null - снимать нечего, файл трогать не надо.
+ *
+ * Тело задачи это черновик одного захода: закрыли день - день ушёл в
+ * «Выполнено», а чекбоксы сбросились под следующий раз. Убрали день из журнала -
+ * сбрасываются тоже, даже если часть галочек стояла: состояние задачи задаёт
+ * журнал, а не тело.
+ */
+export const clearBodyChecks = (content: string): string | null => {
+	const frontmatter = content.match(FRONTMATTER_PATTERN)?.[0] ?? '';
+	const body = content.slice(frontmatter.length);
+	const cleared = clearChecks(body.split('\n')).join('\n');
+
+	return cleared === body ? null : frontmatter + cleared;
+};
+
+/**
+ * Свернуть блоки итераций в один набор чекбоксов. null - блоков нет, сворачивать
+ * нечего.
+ *
+ * Заметки, заведённые пока блоки были, несут по набору чекбоксов на каждый день:
+ * без сворачивания в карточке показались бы все разом. Остаётся **последний**
+ * набор - он и есть текущий; прошлые дни ничего не значат, дни закрытий лежат в
+ * «Выполнено». Текст до первого заголовка не трогается: он не наш.
+ *
+ * Галочки последнего набора сохраняются: их могли поставить руками в редакторе, и
+ * сворачивание не должно эту отметку терять.
+ */
+export const collapseBodyBlocks = (content: string): string | null => {
+	const frontmatter = content.match(FRONTMATTER_PATTERN)?.[0] ?? '';
+	const lines = content.slice(frontmatter.length).split('\n');
+	const blocks = parseBodyBlocks(lines);
+
+	if (blocks.length === 0) return null;
+
+	const last = blocks[blocks.length - 1];
+	const kept = [...lines.slice(0, blocks[0].start), ...lines.slice(last.start + 1, last.end + 1)];
+	const body = kept.join('\n').replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '');
+
+	return `${frontmatter}${body}\n`;
+};
+
+/**
+ * Все чекбоксы отмечены - задача сделана.
  *
  * Считается по строкам, а не по тому, что нарисовал рендер: вложенные чекбоксы
  * такие же строки списка и идут в тот же счёт. Ни одного чекбокса - false:
@@ -526,136 +630,46 @@ const allChecked = (lines: string[]): boolean => {
 };
 
 /**
- * Строки тела, относящиеся к этому дню.
+ * Задача закрыта: все чекбоксы тела отмечены.
  *
- * У задачи с блоками итераций это блок дня - у каждого повтора свой набор
- * галочек. Блока нет (или блоков нет вовсе) - всё тело.
+ * Дня в расчёте больше нет - набор чекбоксов у задачи один. Отмечены все, значит
+ * закрывается тот день, за который отмечали: выбранный в календаре или самый
+ * ранний непокрытый, если галочки поставили в самой заметке.
  */
-const dayLines = (body: string, date: string): string[] => {
-	const lines = body.split('\n');
-	const block = parseBodyBlocks(lines).find((item) => item.date === date);
-
-	return block ? lines.slice(block.start + 1, block.end + 1) : lines;
-};
-
-/** Задача выбранного дня закрыта: все её чекбоксы отмечены. */
-export const isDayComplete = (body: string, date: string): boolean =>
-	allChecked(dayLines(body, date));
+export const isBodyComplete = (body: string): boolean => allChecked(body.split('\n'));
 
 /**
- * Есть ли у дня чекбоксы вообще.
+ * Есть ли в теле чекбоксы вообще.
  *
  * Нужно, чтобы не спутать «ничего не отмечено» с «отмечать нечем»: выполнение
  * считается по чекбоксам, и у задачи без них журнал закрытий трогать нельзя -
  * дату туда мог вписать человек руками.
  */
-export const hasDayCheckboxes = (body: string, date: string): boolean =>
-	dayLines(body, date).some((line) => BODY_TASK_LINE.test(line));
-
-/** В теле есть блоки итераций - значит задача уже живёт по дням. */
-export const hasBodyBlocks = (body: string): boolean =>
-	parseBodyBlocks(body.split('\n')).length > 0;
-
-/** Даты блоков итераций в порядке появления. Блоков нет - пустой список. */
-export const bodyBlockDates = (body: string): string[] =>
-	parseBodyBlocks(body.split('\n')).map((block) => block.date);
+export const hasCheckboxes = (body: string): boolean =>
+	body.split('\n').some((line) => BODY_TASK_LINE.test(line));
 
 /**
- * Списки блока выбранного дня.
+ * Текст первого чекбокса тела - им подписана закрытая задача.
  *
- * Блоков в теле нет или под этот день блока нет - показывается всё тело, как
- * раньше. Это же оставляет рабочими заметки, заведённые до блоков.
+ * У закрытой показывается ровно одна строка: отмечать в теле нечего, галочки
+ * сброшены, а состояние задаёт журнал «Выполнено». Остальные чекбоксы там лишние.
+ * Чекбоксов нет вовсе - null, подписывать нечем.
  */
-export const extractDayLists = (body: string, date: string): string => {
-	const lines = body.split('\n');
-	const blocks = parseBodyBlocks(lines);
-	const block = blocks.find((item) => item.date === date);
-
-	if (block) return collectLists(lines.slice(block.start + 1, block.end + 1)).join('\n');
-
-	// Блоков нет вовсе - заметка живёт по-старому, показываем всё тело.
-	if (blocks.length === 0) return extractLists(body);
-
-	// Блоки есть, а этого дня среди них нет: показываем чистую копию последней
-	// итерации - как будет выглядеть этот день. Слить все блоки в один список
-	// нельзя: получится каша из чужих галочек, и номера чекбоксов разъедутся.
-	const last = blocks[blocks.length - 1];
-
-	return clearChecks(collectLists(lines.slice(last.start + 1, last.end + 1))).join('\n');
-};
-
-/**
- * Пометить датой чекбоксы, которые ещё не лежат ни в одном блоке.
- *
- * Так первая же отметка «сделал» превращает обычное тело в первый блок
- * итерации. Заголовок ставится перед первой строкой списка, всё остальное
- * остаётся на месте. Свободных чекбоксов нет - null, писать нечего.
- */
-export const labelBodyBlock = (content: string, date: string): string | null => {
-	const frontmatter = content.match(FRONTMATTER_PATTERN)?.[0] ?? '';
-	const lines = content.slice(frontmatter.length).split('\n');
-	const blocks = parseBodyBlocks(lines);
-	const limit = blocks.length > 0 ? blocks[0].start : lines.length;
-
+export const firstCheckboxText = (body: string): string | null => {
 	let inFence = false;
-	let firstList = -1;
 
-	for (let i = 0; i < limit; i++) {
-		if (FENCE_LINE.test(lines[i])) {
+	for (const line of body.split('\n')) {
+		if (FENCE_LINE.test(line)) {
 			inFence = !inFence;
 			continue;
 		}
+		if (inFence) continue;
 
-		if (!inFence && BODY_TASK_LINE.test(lines[i])) {
-			firstList = i;
-			break;
-		}
+		const parts = line.match(BODY_TASK_LINE);
+		if (parts) return parts[3].slice(1).trim() || null;
 	}
 
-	if (firstList === -1) return null;
-
-	// Заголовок должен стоять отдельным абзацем, иначе он прилипнет к тексту выше.
-	const heading = firstList > 0 && lines[firstList - 1].trim() !== ''
-		? ['', `## ${date}`]
-		: [`## ${date}`];
-
-	lines.splice(firstList, 0, ...heading);
-
-	return frontmatter + lines.join('\n');
-};
-
-/**
- * Завести в теле чистый блок под указанный день - копию последнего набора со
- * снятыми галочками.
- *
- * Блок встаёт **на своё место по дате**, а не в хвост: иначе заметка, в которой
- * дни закрывали вразнобой, превращается в мешанину заголовков.
- *
- * null - копировать нечего (чекбоксов в теле нет) или блок под этот день уже
- * есть. Второе важно: без этой проверки каждый скан дописывал бы новый блок.
- */
-export const appendBodyBlock = (content: string, date: string): string | null => {
-	const frontmatter = content.match(FRONTMATTER_PATTERN)?.[0] ?? '';
-	const body = content.slice(frontmatter.length);
-	const lines = body.split('\n');
-	const blocks = parseBodyBlocks(lines);
-
-	if (blocks.some((block) => block.date === date)) return null;
-
-	const last = blocks[blocks.length - 1];
-	const source = last ? lines.slice(last.start + 1, last.end + 1) : lines;
-	const template = clearChecks(collectLists(source));
-
-	if (!template.some((line) => BODY_TASK_LINE.test(line))) return null;
-
-	const block = [`## ${date}`, ...template, ''];
-	const next = blocks.find((item) => item.date > date);
-
-	if (!next) return `${frontmatter}${body.trimEnd()}\n\n${block.join('\n')}`;
-
-	lines.splice(next.start, 0, ...block);
-
-	return frontmatter + lines.join('\n');
+	return null;
 };
 
 /** Задачу закрывали в этот день. */
@@ -726,6 +740,20 @@ const occursOnDay = (note: TaskNote, start: Day, target: Day): boolean => {
 		return weeks >= 0 && weeks % note.repeat.interval === 0;
 	}
 
+	// Годовой повтор с месяцами: число берётся из «Даты», месяц - из оговорки, а
+	// сама «Дата» днём задачи не становится, ровно как у дней недели. «Каждый год
+	// в марте» при «Дате» 13 августа - это 13 марта, начиная со следующего года.
+	if (note.repeat.months !== undefined) {
+		if (!note.repeat.months.includes(target.month())) return false;
+
+		// Число сверяется напрямую: 31-е в коротком месяце просто не наступает.
+		if (target.date() !== start.date()) return false;
+
+		const years = target.year() - start.year();
+
+		return years >= 0 && years % note.repeat.interval === 0;
+	}
+
 	if (target.isSame(start, 'day')) return true;
 
 	const { interval, unit } = note.repeat;
@@ -765,6 +793,9 @@ export const occursOn = (note: TaskNote, date: string): boolean => {
  *
  * Шаг ищется перебором с запасом: у месячных повторов дни вроде 31-го
  * встречаются не в каждом месяце, и такие месяцы надо пропустить.
+ *
+ * День, от которого считаем, сам повтором быть не обязан: «каждый год в марте»
+ * спрашивают и от «Даты» в августе.
  */
 export const nextOccurrenceAfter = (note: TaskNote, date: string): string | null => {
 	if (!note.repeat) return null;
@@ -772,7 +803,28 @@ export const nextOccurrenceAfter = (note: TaskNote, date: string): string | null
 	const from = parseDay(date);
 	if (!from.isValid()) return null;
 
-	const { interval, unit, weekdays } = note.repeat;
+	const { interval, unit, weekdays, months } = note.repeat;
+
+	// У годового повтора с месяцами между повторами бывает целый год, и перебор
+	// по дням стоил бы сотни шагов. Кандидат собирается сразу: месяц перебором,
+	// число - из «Даты». Не наступает такое число в этом месяце (31-е в феврале) -
+	// occursOn его и отсеет.
+	if (months) {
+		const start = note.date ? parseDay(note.date) : null;
+		if (!start || !start.isValid()) return null;
+
+		const first = from.clone().startOf('month');
+
+		for (let i = 0; i <= 12 * interval + 12; i++) {
+			const candidate = first.clone().add(i, 'month').date(start.date()).format(DATE_FORMAT);
+
+			// Месяц может быть тот же, что у самого date, поэтому шаг с нуля - но
+			// отдавать день не позже исходного нельзя.
+			if (candidate > date && occursOn(note, candidate)) return candidate;
+		}
+
+		return null;
+	}
 
 	// Дни недели идут внутри недели вразнобой, поэтому перебираем по дням.
 	const step = weekdays ? 1 : interval;
@@ -871,3 +923,100 @@ export const getDoneTasksForDate = (notes: TaskNote[], date: string): TaskNote[]
 	notes
 		.filter((note) => isDoneOn(note, date))
 		.sort((a, b) => byName.compare(a.task, b.task));
+
+/**
+ * Самый ранний непокрытый день задачи, не позже границы.
+ *
+ * Череда идёт от «Даты» вперёд, и первый день, которого нет в журнале закрытий,
+ * и есть ответ. Дальше искать нечего: пропущенный день так и остаётся
+ * просроченным, а закрывать надо самый старый долг.
+ *
+ * Шагов не больше, чем закрытий: каждый шаг либо находит непокрытый день, либо
+ * съедает одну запись журнала. Поэтому даже у задачи, которую закрывали годами,
+ * перебор конечен и короток.
+ *
+ * Журнал проверяется через Set, а не `isDoneOn`: у долгоживущей повторки записей
+ * сотни, и поиск по списку внутри перебора дал бы квадрат.
+ */
+const earliestPending = (note: TaskNote, limit: string, inclusive: boolean): string | null => {
+	if (note.stopped || isClosed(note) || !note.date) return null;
+
+	const done = new Set(note.done);
+	// «Дата» сама повтором быть не обязана: у «каждой субботы» и «каждого марта»
+	// череда начинается позже неё.
+	let day: string | null = occursOn(note, note.date)
+		? note.date
+		: nextOccurrenceAfter(note, note.date);
+
+	for (let step = 0; step <= note.done.length; step++) {
+		if (day === null) return null;
+		if (inclusive ? day > limit : day >= limit) return null;
+		if (!done.has(day)) return day;
+
+		day = nextOccurrenceAfter(note, day);
+	}
+
+	return null;
+};
+
+/**
+ * Память просрочки: заметка -> её пропущенный день, посчитанный на этот «сегодня».
+ *
+ * Список дня пересчитывается на каждое событие хранилища, а просрочку спрашивают у
+ * всех задач сразу. У задачи, которую закрывали годами, перебор упирается в длину
+ * журнала: 50 таких заметок по 2000 закрытий - это 0.4 с на каждый пересчёт.
+ *
+ * Ключ - **сам объект заметки**: `TaskNote` собирается заново при каждой правке
+ * файла и после этого не меняется, поэтому попадание в память означает «файл тот
+ * же». Отсюда и WeakMap: пропал файл - запись уходит сама.
+ *
+ * «Сегодня» лежит в значении: календарь держат открытым сутками, и через полночь
+ * ответ становится другим.
+ */
+const overdueMemo = new WeakMap<TaskNote, { today: string; overdue: string | null }>();
+
+/** Самый ранний пропущенный день - строго до указанного дня. */
+export const firstPendingBefore = (note: TaskNote, date: string): string | null => {
+	const cached = overdueMemo.get(note);
+	if (cached && cached.today === date) return cached.overdue;
+
+	const overdue = earliestPending(note, date, false);
+	overdueMemo.set(note, { today: date, overdue });
+
+	return overdue;
+};
+
+/** Самый ранний непокрытый день - не позже указанного дня. */
+export const firstPendingUpTo = (note: TaskNote, date: string): string | null =>
+	earliestPending(note, date, true);
+
+/** Просроченная задача и её пропущенный день. */
+export interface OverdueTask {
+	note: TaskNote;
+	/** Самый ранний пропущенный день - карточка закрывает именно его. */
+	date: string;
+}
+
+/**
+ * Просроченные задачи - те, у которых остался незакрытый день в прошлом.
+ *
+ * Показываются **только на сегодняшнем дне** и только по одной карточке на
+ * задачу, с самым ранним пропущенным днём. Иначе ежедневная задача, забытая на
+ * месяц, дала бы тридцать карточек и список стало бы невозможно читать. Закрыли
+ * долг - карточка перерисовалась на следующий пропущенный день.
+ *
+ * Порядок - от старого долга к свежему, при равных днях по наименованию.
+ */
+export const getOverdueTasks = (notes: TaskNote[], today: string): OverdueTask[] => {
+	const overdue: OverdueTask[] = [];
+
+	for (const note of notes) {
+		const date = firstPendingBefore(note, today);
+
+		if (date !== null) overdue.push({ note, date });
+	}
+
+	return overdue.sort((a, b) =>
+		(a.date < b.date ? -1 : a.date > b.date ? 1 : 0) || byName.compare(a.note.task, b.note.task)
+	);
+};

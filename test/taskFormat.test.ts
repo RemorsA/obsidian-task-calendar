@@ -1,11 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import {
+	clearBodyChecks,
+	collapseBodyBlocks,
 	extractBody,
 	extractLists,
+	firstCheckboxText,
+	firstPendingBefore,
+	firstPendingUpTo,
 	getDoneTasksForDate,
+	getOverdueTasks,
 	getTasksForDate,
+	hasCheckboxes,
 	hasPendingTasks,
+	isBodyComplete,
 	isClosed,
+	nextOccurrenceAfter,
 	normalizeDate,
 	pendingDays,
 	taskNameFromFile,
@@ -130,6 +139,51 @@ describe('parseRepeat', () => {
 		expect(parseRepeat('каждую неделю в бублик')).toBeNull();
 		expect(parseRepeat('каждую неделю в субботу, бублик')).toBeNull();
 		expect(parseRepeat('по будням')).toBeNull();
+	});
+
+	it('каждый год в месяцах', () => {
+		expect(parseRepeat('каждый год в марте'))
+			.toEqual({ interval: 1, unit: 'year', months: [2] });
+		expect(parseRepeat('Каждый год в Марте, Сентябре'))
+			.toEqual({ interval: 1, unit: 'year', months: [2, 8] });
+		expect(parseRepeat('каждый год в марте и сентябре'))
+			.toEqual({ interval: 1, unit: 'year', months: [2, 8] });
+		expect(parseRepeat('каждые 2 года в марте, в сентябре'))
+			.toEqual({ interval: 2, unit: 'year', months: [2, 8] });
+		// Порядок в свойстве любой - месяцы отдаются по возрастанию.
+		expect(parseRepeat('каждый год в сентябре, марте'))
+			.toEqual({ interval: 1, unit: 'year', months: [2, 8] });
+		expect(parseRepeat('каждый год в январе, феврале, декабре'))
+			.toEqual({ interval: 1, unit: 'year', months: [0, 1, 11] });
+	});
+
+	it('месяцы принимаются в любом падеже', () => {
+		expect(parseRepeat('каждый год в мае')).toEqual({ interval: 1, unit: 'year', months: [4] });
+		expect(parseRepeat('каждый год в мая')).toEqual({ interval: 1, unit: 'year', months: [4] });
+		expect(parseRepeat('каждый год в май')).toEqual({ interval: 1, unit: 'year', months: [4] });
+	});
+
+	it('короткая форма без слова «год»', () => {
+		expect(parseRepeat('каждый март')).toEqual({ interval: 1, unit: 'year', months: [2] });
+		expect(parseRepeat('каждый март, сентябрь'))
+			.toEqual({ interval: 1, unit: 'year', months: [2, 8] });
+		// Число - всегда шаг повтора: «каждые 2 марта» это не второе марта.
+		expect(parseRepeat('каждые 2 марта')).toEqual({ interval: 2, unit: 'year', months: [2] });
+	});
+
+	it('повторы месяцев в перечислении не задваиваются', () => {
+		expect(parseRepeat('каждый год в марте, марте'))
+			.toEqual({ interval: 1, unit: 'year', months: [2] });
+	});
+
+	it('месяц уточняет только год', () => {
+		expect(parseRepeat('каждый месяц в марте')).toBeNull();
+		expect(parseRepeat('каждую неделю в марте')).toBeNull();
+		expect(parseRepeat('каждый день в марте')).toBeNull();
+		expect(parseRepeat('каждый год в бублике')).toBeNull();
+		expect(parseRepeat('каждый год в марте, бублике')).toBeNull();
+		// Месяцы и дни недели в одной оговорке не смешиваются.
+		expect(parseRepeat('каждый год в марте, субботу')).toBeNull();
 	});
 
 	it('в свойстве только одна повторка - составная запись не принимается', () => {
@@ -339,6 +393,52 @@ describe('occursOn', () => {
 		expect(occursOn(weekly, '2026-08-10')).toBe(false);
 		expect(occursOn(weekly, '2026-08-17')).toBe(true);
 		expect(occursOn(weekly, '2026-08-24')).toBe(true);
+	});
+
+	it('каждый год в марте, сентябре - то же число этих месяцев', () => {
+		// «Дата» - 13 августа: число повтора берётся из неё.
+		const twice = note({
+			date: '2026-08-13',
+			repeat: { interval: 1, unit: 'year', months: [2, 8] },
+		});
+
+		expect(occursOn(twice, '2026-08-13')).toBe(false); // август в оговорке не назван
+		expect(occursOn(twice, '2026-09-13')).toBe(true);
+		expect(occursOn(twice, '2026-09-12')).toBe(false); // число не то
+		expect(occursOn(twice, '2027-03-13')).toBe(true);
+		expect(occursOn(twice, '2027-09-13')).toBe(true);
+		expect(occursOn(twice, '2028-03-13')).toBe(true);
+	});
+
+	it('месяц раньше «Даты» в её же году не считается', () => {
+		const march = note({
+			date: '2026-08-13',
+			repeat: { interval: 1, unit: 'year', months: [2] },
+		});
+
+		expect(occursOn(march, '2026-03-13')).toBe(false);
+		expect(occursOn(march, '2027-03-13')).toBe(true);
+	});
+
+	it('каждые 2 года в марте - год через год', () => {
+		const biennial = note({
+			date: '2026-03-13',
+			repeat: { interval: 2, unit: 'year', months: [2] },
+		});
+
+		expect(occursOn(biennial, '2026-03-13')).toBe(true);
+		expect(occursOn(biennial, '2027-03-13')).toBe(false);
+		expect(occursOn(biennial, '2028-03-13')).toBe(true);
+	});
+
+	it('31 число не расползается на короткие месяцы и в годовом повторе', () => {
+		const yearly = note({
+			date: '2026-01-31',
+			repeat: { interval: 1, unit: 'year', months: [1, 2] },
+		});
+
+		expect(occursOn(yearly, '2027-02-28')).toBe(false);
+		expect(occursOn(yearly, '2027-03-31')).toBe(true);
 	});
 
 	it('каждую субботу - все субботы начиная со своей недели', () => {
@@ -852,5 +952,282 @@ describe('extractBody', () => {
 
 	it('пустое тело - пустая строка', () => {
 		expect(extractBody('---\nЗадача: Что-то\n---\n')).toBe('');
+	});
+});
+
+describe('nextOccurrenceAfter', () => {
+	it('дневной повтор шагает интервалом', () => {
+		const every3 = note({ date: '2026-08-13', repeat: { interval: 3, unit: 'day' } });
+
+		expect(nextOccurrenceAfter(every3, '2026-08-13')).toBe('2026-08-16');
+	});
+
+	it('месячный повтор пропускает короткие месяцы', () => {
+		const monthly = note({ date: '2026-01-31', repeat: { interval: 1, unit: 'month' } });
+
+		// Февраля 31-го не бывает - следующий повтор в марте.
+		expect(nextOccurrenceAfter(monthly, '2026-01-31')).toBe('2026-03-31');
+	});
+
+	it('годовой повтор с месяцами идёт по названным месяцам', () => {
+		const twice = note({
+			date: '2026-08-13',
+			repeat: { interval: 1, unit: 'year', months: [2, 8] },
+		});
+
+		// «Дата» повтором не является, но отсчёт от неё работает.
+		expect(nextOccurrenceAfter(twice, '2026-08-13')).toBe('2026-09-13');
+		expect(nextOccurrenceAfter(twice, '2026-09-13')).toBe('2027-03-13');
+		expect(nextOccurrenceAfter(twice, '2027-03-13')).toBe('2027-09-13');
+	});
+
+	it('годовой повтор с месяцами ищет и в текущем месяце', () => {
+		const march = note({
+			date: '2026-03-13',
+			repeat: { interval: 1, unit: 'year', months: [2] },
+		});
+
+		// 1 марта - тот же месяц, что и повтор: 13-е ещё впереди.
+		expect(nextOccurrenceAfter(march, '2026-03-01')).toBe('2026-03-13');
+	});
+
+	it('у разовой задачи следующего повтора нет', () => {
+		expect(nextOccurrenceAfter(note({ date: TODAY }), TODAY)).toBeNull();
+	});
+});
+
+describe('isBodyComplete и hasCheckboxes', () => {
+	it('отмечены все чекбоксы - выполнено', () => {
+		expect(isBodyComplete('- [x] Раз\n- [x] Два')).toBe(true);
+		expect(isBodyComplete('- [x] Раз\n\t- [x] Два')).toBe(true);
+	});
+
+	it('хоть один снят - не выполнено', () => {
+		expect(isBodyComplete('- [x] Раз\n- [ ] Два')).toBe(false);
+	});
+
+	it('чекбоксов нет - не выполнено, отмечать нечем', () => {
+		expect(isBodyComplete('')).toBe(false);
+		expect(isBodyComplete('- обычный пункт')).toBe(false);
+		expect(hasCheckboxes('- обычный пункт')).toBe(false);
+		expect(hasCheckboxes('- [ ] Раз')).toBe(true);
+	});
+
+	it('дня в расчёте нет - блоки не размножают наборы', () => {
+		// Заголовок с датой это просто текст: набор чекбоксов считается один.
+		expect(isBodyComplete('## 2026-08-13\n- [x] Раз\n## 2026-08-14\n- [ ] Раз')).toBe(false);
+	});
+});
+
+describe('firstCheckboxText', () => {
+	it('отдаёт текст первого чекбокса', () => {
+		expect(firstCheckboxText('- [ ] Побрить бороду\n- [ ] Подбрить усы'))
+			.toBe('Побрить бороду');
+		expect(firstCheckboxText('- [x] Готово')).toBe('Готово');
+	});
+
+	it('обычные пункты списка не считаются', () => {
+		expect(firstCheckboxText('- просто пункт\n- [ ] Чекбокс')).toBe('Чекбокс');
+	});
+
+	it('строки блока кода пропускаются', () => {
+		expect(firstCheckboxText('```\n- [ ] в коде\n```\n- [ ] настоящий'))
+			.toBe('настоящий');
+	});
+
+	it('чекбоксов нет - null', () => {
+		expect(firstCheckboxText('')).toBeNull();
+		expect(firstCheckboxText('- пункт')).toBeNull();
+		// Пустой текст чекбокса подписью быть не может.
+		expect(firstCheckboxText('- [ ] ')).toBeNull();
+	});
+});
+
+describe('clearBodyChecks', () => {
+	const content = ['---', 'Дата: 2026-08-13', '---', '', '- [x] Раз', '- [x] Два'].join('\n');
+
+	it('снимает все галочки, блок свойств не трогает', () => {
+		expect(clearBodyChecks(content)).toBe(
+			['---', 'Дата: 2026-08-13', '---', '', '- [ ] Раз', '- [ ] Два'].join('\n')
+		);
+	});
+
+	it('снимает и частично отмеченные', () => {
+		expect(clearBodyChecks('- [x] Раз\n- [ ] Два')).toBe('- [ ] Раз\n- [ ] Два');
+	});
+
+	it('снимать нечего - null, файл трогать не надо', () => {
+		expect(clearBodyChecks('- [ ] Раз\n- [ ] Два')).toBeNull();
+		expect(clearBodyChecks('обычный текст')).toBeNull();
+	});
+
+	it('строки блока кода не трогаются', () => {
+		expect(clearBodyChecks('```\n- [x] в коде\n```')).toBeNull();
+	});
+
+	it('отступы, маркеры и текст остаются дословно', () => {
+		expect(clearBodyChecks('\t* [x] Вложенный пункт')).toBe('\t* [ ] Вложенный пункт');
+	});
+});
+
+describe('collapseBodyBlocks', () => {
+	it('оставляет последний набор, заголовки убирает', () => {
+		const content = [
+			'---',
+			'Дата: 2026-08-13',
+			'---',
+			'',
+			'## 2026-08-13',
+			'- [x] Раз',
+			'- [x] Два',
+			'',
+			'## 2026-08-14',
+			'- [x] Раз',
+			'- [ ] Два',
+			'',
+		].join('\n');
+
+		expect(collapseBodyBlocks(content)).toBe(
+			['---', 'Дата: 2026-08-13', '---', '', '- [x] Раз', '- [ ] Два', ''].join('\n')
+		);
+	});
+
+	it('галочки последнего набора сохраняются', () => {
+		// Их могли поставить руками в редакторе - сворачивание отметку не теряет.
+		expect(collapseBodyBlocks('## 2026-08-13\n- [x] Раз')).toBe('- [x] Раз\n');
+	});
+
+	it('текст до первого заголовка не трогается', () => {
+		const content = ['Вступление.', '', '## 2026-08-13', '- [ ] Раз', ''].join('\n');
+
+		expect(collapseBodyBlocks(content)).toBe('Вступление.\n\n- [ ] Раз\n');
+	});
+
+	it('блоков нет - null, сворачивать нечего', () => {
+		expect(collapseBodyBlocks('- [ ] Раз')).toBeNull();
+		// Заголовок без даты блоком итерации не считается.
+		expect(collapseBodyBlocks('## Планы\n- [ ] Раз')).toBeNull();
+	});
+});
+
+describe('firstPendingBefore и firstPendingUpTo', () => {
+	it('разовая задача в прошлом просрочена своим днём', () => {
+		const single = note({ date: '2026-08-10' });
+
+		expect(firstPendingBefore(single, TODAY)).toBe('2026-08-10');
+	});
+
+	it('разовая задача на сегодня не просрочена', () => {
+		expect(firstPendingBefore(note({ date: TODAY }), TODAY)).toBeNull();
+		// Но закрыть её из заметки можно - день не позже сегодня.
+		expect(firstPendingUpTo(note({ date: TODAY }), TODAY)).toBe(TODAY);
+	});
+
+	it('будущая задача не просрочена и из заметки не закрывается', () => {
+		const future = note({ date: '2026-08-20' });
+
+		expect(firstPendingBefore(future, TODAY)).toBeNull();
+		expect(firstPendingUpTo(future, TODAY)).toBeNull();
+	});
+
+	it('у повтора берётся самый ранний незакрытый день', () => {
+		const daily = note({
+			date: '2026-08-10',
+			done: ['2026-08-10', '2026-08-11'],
+			repeat: { interval: 1, unit: 'day' },
+		});
+
+		expect(firstPendingBefore(daily, TODAY)).toBe('2026-08-12');
+	});
+
+	it('все прошлые дни закрыты - просрочки нет', () => {
+		const daily = note({
+			date: '2026-08-11',
+			done: ['2026-08-11', '2026-08-12'],
+			repeat: { interval: 1, unit: 'day' },
+		});
+
+		expect(firstPendingBefore(daily, TODAY)).toBeNull();
+		// Сегодняшний день ещё открыт - его и закроет отметка в заметке.
+		expect(firstPendingUpTo(daily, TODAY)).toBe(TODAY);
+	});
+
+	it('дни, вписанные в журнал вразнобой, не путают отсчёт', () => {
+		const daily = note({
+			date: '2026-08-10',
+			done: ['2026-08-12', '2026-08-11'],
+			repeat: { interval: 1, unit: 'day' },
+		});
+
+		expect(firstPendingBefore(daily, TODAY)).toBe('2026-08-10');
+	});
+
+	it('«Дата» повтором быть не обязана', () => {
+		// Четверг 13 августа, повтор по субботам: череда начинается 15-го.
+		const saturdays = note({
+			date: '2026-08-01',
+			repeat: { interval: 1, unit: 'week', weekdays: [6] },
+		});
+
+		expect(firstPendingBefore(saturdays, TODAY)).toBe('2026-08-01');
+		expect(firstPendingBefore(
+			note({ date: '2026-08-03', repeat: { interval: 1, unit: 'week', weekdays: [6] } }),
+			TODAY
+		)).toBe('2026-08-08');
+	});
+
+	it('закрытая разовая и остановленная задача не просрочены', () => {
+		expect(firstPendingBefore(note({ date: '2026-08-10', done: ['2026-08-10'] }), TODAY))
+			.toBeNull();
+		expect(firstPendingBefore(
+			note({ date: '2026-08-10', repeat: { interval: 1, unit: 'day' }, stopped: true }),
+			TODAY
+		)).toBeNull();
+	});
+
+	it('задача без «Даты» не просрочена', () => {
+		expect(firstPendingBefore(note({ date: null }), TODAY)).toBeNull();
+	});
+});
+
+describe('getOverdueTasks', () => {
+	it('собирает по карточке на задачу, от старого долга к свежему', () => {
+		const notes = [
+			note({ task: 'Свежая', link: 'a.md', date: '2026-08-12' }),
+			note({ task: 'Старая', link: 'b.md', date: '2026-08-01' }),
+			note({ task: 'Сегодняшняя', link: 'c.md', date: TODAY }),
+		];
+
+		expect(getOverdueTasks(notes, TODAY)).toEqual([
+			{ note: notes[1], date: '2026-08-01' },
+			{ note: notes[0], date: '2026-08-12' },
+		]);
+	});
+
+	it('повтор с кучей пропусков даёт одну карточку', () => {
+		const notes = [note({
+			task: 'Побрить бороду',
+			link: 'a.md',
+			date: '2026-07-20',
+			repeat: { interval: 1, unit: 'day' },
+		})];
+
+		expect(getOverdueTasks(notes, TODAY)).toEqual([
+			{ note: notes[0], date: '2026-07-20' },
+		]);
+	});
+
+	it('при равных днях порядок по наименованию', () => {
+		const notes = [
+			note({ task: 'Яблоки', link: 'a.md', date: '2026-08-10' }),
+			note({ task: 'Бумага', link: 'b.md', date: '2026-08-10' }),
+		];
+
+		expect(getOverdueTasks(notes, TODAY).map((item) => item.note.task))
+			.toEqual(['Бумага', 'Яблоки']);
+	});
+
+	it('долгов нет - пустой список', () => {
+		expect(getOverdueTasks([note({ date: TODAY })], TODAY)).toEqual([]);
 	});
 });
