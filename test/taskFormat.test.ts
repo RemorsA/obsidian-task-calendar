@@ -1,19 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import {
-	clearBodyChecks,
-	collapseBodyBlocks,
+	appendBodyBlock,
+	bodyBlockDates,
 	extractBody,
+	extractDayLists,
 	extractLists,
-	firstCheckboxText,
 	firstPendingBefore,
-	firstPendingUpTo,
 	getDoneTasksForDate,
 	getOverdueTasks,
 	getTasksForDate,
-	hasCheckboxes,
+	hasBodyBlocks,
+	hasDayCheckboxes,
 	hasPendingTasks,
-	isBodyComplete,
+	isDayComplete,
 	isClosed,
+	labelBodyBlock,
 	nextOccurrenceAfter,
 	normalizeDate,
 	pendingDays,
@@ -996,121 +997,7 @@ describe('nextOccurrenceAfter', () => {
 	});
 });
 
-describe('isBodyComplete и hasCheckboxes', () => {
-	it('отмечены все чекбоксы - выполнено', () => {
-		expect(isBodyComplete('- [x] Раз\n- [x] Два')).toBe(true);
-		expect(isBodyComplete('- [x] Раз\n\t- [x] Два')).toBe(true);
-	});
-
-	it('хоть один снят - не выполнено', () => {
-		expect(isBodyComplete('- [x] Раз\n- [ ] Два')).toBe(false);
-	});
-
-	it('чекбоксов нет - не выполнено, отмечать нечем', () => {
-		expect(isBodyComplete('')).toBe(false);
-		expect(isBodyComplete('- обычный пункт')).toBe(false);
-		expect(hasCheckboxes('- обычный пункт')).toBe(false);
-		expect(hasCheckboxes('- [ ] Раз')).toBe(true);
-	});
-
-	it('дня в расчёте нет - блоки не размножают наборы', () => {
-		// Заголовок с датой это просто текст: набор чекбоксов считается один.
-		expect(isBodyComplete('## 2026-08-13\n- [x] Раз\n## 2026-08-14\n- [ ] Раз')).toBe(false);
-	});
-});
-
-describe('firstCheckboxText', () => {
-	it('отдаёт текст первого чекбокса', () => {
-		expect(firstCheckboxText('- [ ] Побрить бороду\n- [ ] Подбрить усы'))
-			.toBe('Побрить бороду');
-		expect(firstCheckboxText('- [x] Готово')).toBe('Готово');
-	});
-
-	it('обычные пункты списка не считаются', () => {
-		expect(firstCheckboxText('- просто пункт\n- [ ] Чекбокс')).toBe('Чекбокс');
-	});
-
-	it('строки блока кода пропускаются', () => {
-		expect(firstCheckboxText('```\n- [ ] в коде\n```\n- [ ] настоящий'))
-			.toBe('настоящий');
-	});
-
-	it('чекбоксов нет - null', () => {
-		expect(firstCheckboxText('')).toBeNull();
-		expect(firstCheckboxText('- пункт')).toBeNull();
-		// Пустой текст чекбокса подписью быть не может.
-		expect(firstCheckboxText('- [ ] ')).toBeNull();
-	});
-});
-
-describe('clearBodyChecks', () => {
-	const content = ['---', 'Дата: 2026-08-13', '---', '', '- [x] Раз', '- [x] Два'].join('\n');
-
-	it('снимает все галочки, блок свойств не трогает', () => {
-		expect(clearBodyChecks(content)).toBe(
-			['---', 'Дата: 2026-08-13', '---', '', '- [ ] Раз', '- [ ] Два'].join('\n')
-		);
-	});
-
-	it('снимает и частично отмеченные', () => {
-		expect(clearBodyChecks('- [x] Раз\n- [ ] Два')).toBe('- [ ] Раз\n- [ ] Два');
-	});
-
-	it('снимать нечего - null, файл трогать не надо', () => {
-		expect(clearBodyChecks('- [ ] Раз\n- [ ] Два')).toBeNull();
-		expect(clearBodyChecks('обычный текст')).toBeNull();
-	});
-
-	it('строки блока кода не трогаются', () => {
-		expect(clearBodyChecks('```\n- [x] в коде\n```')).toBeNull();
-	});
-
-	it('отступы, маркеры и текст остаются дословно', () => {
-		expect(clearBodyChecks('\t* [x] Вложенный пункт')).toBe('\t* [ ] Вложенный пункт');
-	});
-});
-
-describe('collapseBodyBlocks', () => {
-	it('оставляет последний набор, заголовки убирает', () => {
-		const content = [
-			'---',
-			'Дата: 2026-08-13',
-			'---',
-			'',
-			'## 2026-08-13',
-			'- [x] Раз',
-			'- [x] Два',
-			'',
-			'## 2026-08-14',
-			'- [x] Раз',
-			'- [ ] Два',
-			'',
-		].join('\n');
-
-		expect(collapseBodyBlocks(content)).toBe(
-			['---', 'Дата: 2026-08-13', '---', '', '- [x] Раз', '- [ ] Два', ''].join('\n')
-		);
-	});
-
-	it('галочки последнего набора сохраняются', () => {
-		// Их могли поставить руками в редакторе - сворачивание отметку не теряет.
-		expect(collapseBodyBlocks('## 2026-08-13\n- [x] Раз')).toBe('- [x] Раз\n');
-	});
-
-	it('текст до первого заголовка не трогается', () => {
-		const content = ['Вступление.', '', '## 2026-08-13', '- [ ] Раз', ''].join('\n');
-
-		expect(collapseBodyBlocks(content)).toBe('Вступление.\n\n- [ ] Раз\n');
-	});
-
-	it('блоков нет - null, сворачивать нечего', () => {
-		expect(collapseBodyBlocks('- [ ] Раз')).toBeNull();
-		// Заголовок без даты блоком итерации не считается.
-		expect(collapseBodyBlocks('## Планы\n- [ ] Раз')).toBeNull();
-	});
-});
-
-describe('firstPendingBefore и firstPendingUpTo', () => {
+describe('firstPendingBefore', () => {
 	it('разовая задача в прошлом просрочена своим днём', () => {
 		const single = note({ date: '2026-08-10' });
 
@@ -1119,15 +1006,10 @@ describe('firstPendingBefore и firstPendingUpTo', () => {
 
 	it('разовая задача на сегодня не просрочена', () => {
 		expect(firstPendingBefore(note({ date: TODAY }), TODAY)).toBeNull();
-		// Но закрыть её из заметки можно - день не позже сегодня.
-		expect(firstPendingUpTo(note({ date: TODAY }), TODAY)).toBe(TODAY);
 	});
 
-	it('будущая задача не просрочена и из заметки не закрывается', () => {
-		const future = note({ date: '2026-08-20' });
-
-		expect(firstPendingBefore(future, TODAY)).toBeNull();
-		expect(firstPendingUpTo(future, TODAY)).toBeNull();
+	it('будущая задача не просрочена', () => {
+		expect(firstPendingBefore(note({ date: '2026-08-20' }), TODAY)).toBeNull();
 	});
 
 	it('у повтора берётся самый ранний незакрытый день', () => {
@@ -1148,8 +1030,6 @@ describe('firstPendingBefore и firstPendingUpTo', () => {
 		});
 
 		expect(firstPendingBefore(daily, TODAY)).toBeNull();
-		// Сегодняшний день ещё открыт - его и закроет отметка в заметке.
-		expect(firstPendingUpTo(daily, TODAY)).toBe(TODAY);
 	});
 
 	it('дни, вписанные в журнал вразнобой, не путают отсчёт', () => {
@@ -1229,5 +1109,194 @@ describe('getOverdueTasks', () => {
 
 	it('долгов нет - пустой список', () => {
 		expect(getOverdueTasks([note({ date: TODAY })], TODAY)).toEqual([]);
+	});
+});
+
+describe('блоки итераций - пункт списка с датой', () => {
+	const note = (body: string): string =>
+		['---', 'Дата: 2026-08-13', 'Выполнено:', 'Повтор: каждый день', '---', '', body].join('\n');
+
+	const body = (content: string): string => content;
+
+	describe('labelBodyBlock', () => {
+		it('заворачивает свободные чекбоксы в блок дня', () => {
+			const content = note('- [ ] Task 1\n\t- [ ] Sub Task\n- List\n');
+
+			expect(labelBodyBlock(content, '2026-08-13')).toBe(note([
+				'- 2026-08-13',
+				'\t- [ ] Task 1',
+				'\t\t- [ ] Sub Task',
+				'\t- List',
+				'',
+			].join('\n')));
+		});
+
+		it('вложенность внутри дня сохраняется как была', () => {
+			const labeled = labelBodyBlock(note('- [ ] Раз\n\t\t- [ ] Глубже'), '2026-08-13');
+
+			expect(labeled).toContain('\t- [ ] Раз');
+			expect(labeled).toContain('\t\t\t- [ ] Глубже');
+		});
+
+		it('текст перед списком остаётся на месте, блок отбивается пустой строкой', () => {
+			const labeled = labelBodyBlock(note('Вступление.\n- [ ] Раз'), '2026-08-13');
+
+			expect(labeled).toContain('Вступление.\n\n- 2026-08-13\n\t- [ ] Раз');
+		});
+
+		it('чекбоксов нет - null, писать нечего', () => {
+			expect(labelBodyBlock(note('- просто пункт'), '2026-08-13')).toBeNull();
+			expect(labelBodyBlock(note('обычный текст'), '2026-08-13')).toBeNull();
+		});
+
+		it('блок свойств не трогается', () => {
+			expect(labelBodyBlock(note('- [ ] Раз'), '2026-08-13'))
+				.toContain('Повтор: каждый день');
+		});
+	});
+
+	describe('appendBodyBlock', () => {
+		const labeled = note(['- 2026-08-13', '\t- [x] Раз', '\t- [x] Два', ''].join('\n'));
+
+		it('дописывает чистую копию последнего набора', () => {
+			expect(appendBodyBlock(labeled, '2026-08-14')).toBe(note([
+				'- 2026-08-13',
+				'\t- [x] Раз',
+				'\t- [x] Два',
+				'- 2026-08-14',
+				'\t- [ ] Раз',
+				'\t- [ ] Два',
+				'',
+			].join('\n')));
+		});
+
+		it('блок встаёт на своё место по дате, а не в хвост', () => {
+			const two = note([
+				'- 2026-08-13', '\t- [x] Раз',
+				'- 2026-08-15', '\t- [ ] Раз', '',
+			].join('\n'));
+
+			expect(bodyBlockDates(appendBodyBlock(two, '2026-08-14') ?? ''))
+				.toEqual(['2026-08-13', '2026-08-14', '2026-08-15']);
+		});
+
+		it('блок под этот день уже есть - null', () => {
+			expect(appendBodyBlock(labeled, '2026-08-13')).toBeNull();
+		});
+
+		it('копировать нечего - null', () => {
+			expect(appendBodyBlock(note('- 2026-08-13\n\t- просто пункт'), '2026-08-14')).toBeNull();
+		});
+
+		it('у старого блока-заголовка содержимое вкладывается как у нового', () => {
+			const legacy = note('## 2026-08-13\n- [x] Раз\n');
+
+			expect(appendBodyBlock(legacy, '2026-08-14'))
+				.toContain('- 2026-08-14\n\t- [ ] Раз');
+		});
+	});
+
+	describe('extractDayLists', () => {
+		const two = body([
+			'- 2026-08-13',
+			'\t- [x] Раз',
+			'\t\t- [x] Вложенный',
+			'\t- List',
+			'- 2026-08-14',
+			'\t- [ ] Раз',
+			'\t\t- [ ] Вложенный',
+			'\t- List',
+		].join('\n'));
+
+		it('дата срезается, остальное показывается без общего отступа', () => {
+			expect(extractDayLists(two, '2026-08-13'))
+				.toBe('- [x] Раз\n\t- [x] Вложенный\n- List');
+			expect(extractDayLists(two, '2026-08-14'))
+				.toBe('- [ ] Раз\n\t- [ ] Вложенный\n- List');
+		});
+
+		it('блоков нет вовсе - показывается всё тело', () => {
+			expect(extractDayLists('- [ ] Раз\n- [x] Два', '2026-08-13'))
+				.toBe('- [ ] Раз\n- [x] Два');
+		});
+
+		it('блока под этот день нет - чистая копия последней итерации', () => {
+			const done = body('- 2026-08-13\n\t- [x] Раз\n\t- [x] Два');
+
+			expect(extractDayLists(done, '2026-08-20')).toBe('- [ ] Раз\n- [ ] Два');
+		});
+
+		it('старый блок-заголовок читается по-прежнему', () => {
+			const legacy = body('## 2026-08-13\n- [x] Раз\n\n## 2026-08-14\n- [ ] Раз');
+
+			expect(extractDayLists(legacy, '2026-08-13')).toBe('- [x] Раз');
+			expect(extractDayLists(legacy, '2026-08-14')).toBe('- [ ] Раз');
+		});
+	});
+
+	describe('границы блока', () => {
+		it('дата внутри блока - подзадача, а не новый блок', () => {
+			const nested = body('- 2026-08-13\n\t- [ ] 2026-08-14\n\t- [ ] Ещё');
+
+			expect(bodyBlockDates(nested)).toEqual(['2026-08-13']);
+			expect(extractDayLists(nested, '2026-08-13')).toBe('- [ ] 2026-08-14\n- [ ] Ещё');
+		});
+
+		it('строка на уровне метки блок закрывает', () => {
+			const after = body('- 2026-08-13\n\t- [ ] Раз\nПосторонний абзац');
+
+			expect(isDayComplete(after, '2026-08-13')).toBe(false);
+			expect(extractDayLists(after, '2026-08-13')).toBe('- [ ] Раз');
+		});
+
+		it('дата с текстом меткой не считается', () => {
+			expect(bodyBlockDates('- 2026-08-13 уборка')).toEqual([]);
+			expect(hasBodyBlocks('- [ ] 2026-08-13')).toBe(false);
+		});
+	});
+
+	describe('состояние дня', () => {
+		const two = body([
+			'- 2026-08-13', '\t- [x] Раз', '\t- [x] Два',
+			'- 2026-08-14', '\t- [x] Раз', '\t- [ ] Два',
+		].join('\n'));
+
+		it('день закрыт, когда отмечены все его чекбоксы', () => {
+			expect(isDayComplete(two, '2026-08-13')).toBe(true);
+			expect(isDayComplete(two, '2026-08-14')).toBe(false);
+		});
+
+		it('чекбоксы считаются только внутри своего дня', () => {
+			expect(hasDayCheckboxes(two, '2026-08-13')).toBe(true);
+			// Блока под этот день нет - в счёт идёт всё тело.
+			expect(hasDayCheckboxes(two, '2026-08-20')).toBe(true);
+			expect(hasDayCheckboxes('- 2026-08-13\n\t- пункт', '2026-08-13')).toBe(false);
+		});
+	});
+
+	describe('нумерация чекбоксов внутри блока', () => {
+		const content = note([
+			'- 2026-08-13', '\t- [ ] Раз', '\t- [ ] Два',
+			'- 2026-08-14', '\t- [ ] Раз', '\t- [ ] Два', '',
+		].join('\n'));
+
+		it('галочка правит строку своего блока, а не соседнего', () => {
+			const toggled = toggleBodyCheckbox(content, 1, '2026-08-14') ?? '';
+
+			expect(toggled).toContain('- 2026-08-13\n\t- [ ] Раз\n\t- [ ] Два');
+			expect(toggled).toContain('- 2026-08-14\n\t- [ ] Раз\n\t- [x] Два');
+		});
+
+		it('нумерация совпадает с тем, что показано в карточке', () => {
+			const shown = extractDayLists(extractBody(content), '2026-08-14').split('\n');
+			const index = shown.findIndex((line) => line.includes('Два'));
+			const toggled = toggleBodyCheckbox(content, index, '2026-08-14') ?? '';
+
+			expect(toggled).toContain('- 2026-08-14\n\t- [ ] Раз\n\t- [x] Два');
+		});
+
+		it('блока с такой датой нет - считаем по всему телу', () => {
+			expect(toggleBodyCheckbox(content, 0, '2026-08-20')).toContain('\t- [x] Раз');
+		});
 	});
 });

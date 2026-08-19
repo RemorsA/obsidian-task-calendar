@@ -171,6 +171,11 @@
 	 * потом задачи выбранного дня, в конце закрытые. Группы различаются видом
 	 * самих карточек - рамкой у просроченной и перечёркнутым текстом у закрытой.
 	 */
+
+	.task__calendar-tasks-loading {
+		margin-top: 10px;
+	}
+
 	.task__calendar-tasks {
 		.tasks__item {
 			border: 1px solid  var(--color-base-30);
@@ -190,6 +195,10 @@
 			.tasks__item-body {
 				-webkit-user-select: text;
 				user-select: text;
+
+				.contains-task-list, ol {
+					margin: 0 auto;
+				}
 			}
 
 			/* Просроченная отличается только рамкой: подписи дня на карточке нет. */
@@ -197,8 +206,13 @@
 				border-color: color-mix(in srgb, var(--color-red), transparent 60%);
 			}
 
+			/*
+			 * Закрытая задача - перечёркнутый список целиком. Перечёркивание своё, а
+			 * не от темы: тема рисует его только при включённой настройке чтения, и
+			 * закрытая задача осталась бы неотличимой от открытой.
+			 */
 			&.--is-done {
-				.tasks__item-title {
+				.tasks__item-body {
 					text-decoration: line-through;
 					color: color-mix(in srgb, var(--color-base-100), transparent 40%);
 				}

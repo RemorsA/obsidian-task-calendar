@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount, VueWrapper } from '@vue/test-utils';
 import momentLib from 'moment';
 import TaskCalendar from '../src/components/TaskCalendar.vue';
-import type { SelectedTask } from '../src/taskFormat';
+import { bodyBlockDates, extractBody, type SelectedTask } from '../src/taskFormat';
 import { MarkdownRenderer, Notice, TFile } from './mocks/obsidian';
 import {
 	createPluginDouble,
@@ -11,6 +11,9 @@ import {
 	TODAY,
 	useFixedClock,
 } from './helpers';
+
+/** Тело заметки без блока свойств - по нему проверяем, что записал плагин. */
+const bodyOf = (content: string): string => extractBody(content);
 
 /** Первая ячейка сетки августа 2026: месяц начинается в субботу. */
 const GRID_START = '2026-07-27';
@@ -437,16 +440,12 @@ describe('задачи выбранного дня', () => {
 				link: 'Дела/Купить молоко.md',
 				date: '2026-08-14',
 				body: '- [ ] Подзадача 1\n- [ ] Подзадача 2\n\t- [ ] Подзадача 2.1',
-				// Подпись закрытой - текст первого чекбокса тела.
-				title: 'Подзадача 1',
 			},
 			{
 				task: 'Отбросить сомнения',
 				link: 'Дела/Отбросить сомнения.md',
 				date: '2026-08-14',
 				body: '',
-				// Чекбоксов в теле нет - остаётся наименование задачи.
-				title: 'Отбросить сомнения',
 			},
 		]);
 	});
@@ -558,7 +557,7 @@ describe('задачи выбранного дня', () => {
 		await flushPromises();
 
 		expect(selectedTasks(wrapper)).toEqual([
-			{ task: 'Битая', link: 'Битая.md', date: TODAY, body: '', title: 'Битая' },
+			{ task: 'Битая', link: 'Битая.md', date: TODAY, body: '' },
 		]);
 	});
 });
@@ -933,54 +932,72 @@ describe('закрытые задачи в хвосте списка', () => {
 		expect(doneItems(wrapper)).toHaveLength(1);
 	});
 
-	it('у закрытой задачи одна строка - текст первого чекбокса', async () => {
+	it('у закрытой задачи список показан целиком', async () => {
 		const { wrapper } = await mountCalendar({
 			files: {
 				'Разовая.md': taskNoteText({
 					date: TODAY,
 					done: [TODAY],
-					body: '- [ ] Подзадача 1\n- [ ] Подзадача 2',
+					body: '- [x] Подзадача 1\n- [x] Подзадача 2\n\t- [x] Подзадача 2.1',
 				}),
 			},
 		});
 
-		const item = doneItems(wrapper)[0];
-		const boxes = item.findAll('input.task-list-item-checkbox');
+		const boxes = doneItems(wrapper)[0].findAll('input.task-list-item-checkbox');
 
-		// Остальные чекбоксы не показываются: тело сброшено, отмечать нечего.
-		expect(boxes).toHaveLength(1);
-		expect((boxes[0].element as HTMLInputElement).checked).toBe(true);
-		expect(item.find('.tasks__item-title').text()).toBe('Подзадача 1');
+		// Список не срезается: видно, что именно закрыли.
+		expect(boxes).toHaveLength(3);
+		expect(boxes.map((box) => (box.element as HTMLInputElement).checked))
+			.toEqual([true, true, true]);
 	});
 
-	it('чекбокс закрытой отмечен по журналу, даже если тело сброшено', async () => {
+	it('у закрытого повтора показан блок этого дня', async () => {
 		const { wrapper } = await mountCalendar({
 			files: {
-				// Галочек в теле нет, а день в журнале есть - так выглядит закрытая.
-				'Разовая.md': taskNoteText({ date: TODAY, done: [TODAY], body: '- [ ] Разовая' }),
+				'Купить молоко.md': taskNoteText({
+					date: '2026-08-12',
+					done: [TODAY],
+					repeat: 'каждый день',
+					body: [
+						'- 2026-08-12',
+						'\t- [ ] Раз',
+						`- ${TODAY}`,
+						'\t- [x] Раз',
+						'\t- [x] Два',
+					].join('\n'),
+				}),
 			},
 		});
 
-		const box = doneItems(wrapper)[0].find('input.task-list-item-checkbox');
+		const boxes = doneItems(wrapper)[0].findAll('input.task-list-item-checkbox');
 
-		expect((box.element as HTMLInputElement).checked).toBe(true);
+		// Блок 12 августа сюда не попадает - у каждой итерации свой набор.
+		expect(boxes).toHaveLength(2);
+		expect(boxes.map((box) => (box.element as HTMLInputElement).checked))
+			.toEqual([true, true]);
 	});
 
-	it('клик по чекбоксу закрытой убирает день из журнала и возвращает задачу', async () => {
+	it('снятая галочка у закрытой возвращает её в работу', async () => {
 		const { wrapper, vault } = await mountCalendar({
 			files: {
-				'Разовая.md': taskNoteText({ date: TODAY, done: [TODAY], body: '- [x] Разовая' }),
+				'Разовая.md': taskNoteText({
+					date: TODAY,
+					done: [TODAY],
+					body: '- [x] Раз\n- [x] Два',
+				}),
 			},
 		});
 
-		await doneItems(wrapper)[0].find('input.task-list-item-checkbox').trigger('click');
-		vi.advanceTimersByTime(300);
-		await flushPromises();
+		await doneItems(wrapper)[0].findAll('input.task-list-item-checkbox')[1].trigger('click');
+		await settle();
 
-		expect(vault.contentOf('Разовая.md')).not.toContain(`  - ${TODAY}`);
+		const content = vault.contentOf('Разовая.md') ?? '';
+
+		expect(content).not.toContain(`  - ${TODAY}`);
+		// Снялась только своя галочка - остальное сделанное на месте.
+		expect(content).toContain('- [x] Раз');
+		expect(content).toContain('- [ ] Два');
 		expect(pendingItems(wrapper)).toHaveLength(1);
-		expect(doneItems(wrapper)).toHaveLength(0);
-		expect(hasTaskOn(wrapper, TODAY)).toBe(true);
 	});
 
 	it('отмена у повторяющейся задачи «Дату» не трогает, а день возвращает', async () => {
@@ -990,42 +1007,41 @@ describe('закрытые задачи в хвосте списка', () => {
 					date: '2026-08-10',
 					done: [TODAY],
 					repeat: 'каждый день',
-					body: '- [ ] Купить молоко',
+					body: `- ${TODAY}\n\t- [x] Купить молоко`,
 				}),
 			},
 		});
 
 		await doneItems(wrapper)[0].find('input.task-list-item-checkbox').trigger('click');
-		vi.advanceTimersByTime(300);
-		await flushPromises();
+		await settle();
 
 		expect(vault.contentOf('Купить молоко.md')).toContain('Дата: 2026-08-10');
 		expect(hasTaskOn(wrapper, TODAY)).toBe(true);
 	});
 
-	it('отмена трогает только свой день, остальной журнал цел', async () => {
+	it('снятая галочка трогает только свой день, остальной журнал цел', async () => {
 		const { wrapper, vault } = await mountCalendar({
 			files: {
 				'Купить молоко.md': taskNoteText({
 					date: '2026-08-12',
 					done: ['2026-08-12', TODAY],
 					repeat: 'каждый день',
-					body: '- [ ] Купить молоко',
+					body: `- ${TODAY}\n\t- [x] Купить молоко`,
 				}),
 			},
 		});
 
 		await doneItems(wrapper)[0].find('input.task-list-item-checkbox').trigger('click');
-		vi.advanceTimersByTime(300);
-		await flushPromises();
+		await settle();
 
 		const content = vault.contentOf('Купить молоко.md') ?? '';
+
 		expect(content).not.toContain(`  - ${TODAY}`);
-		// Отменяли только сегодняшний день - 12 августа в журнале остаётся.
+		// У 12 августа блока нет - сверка его не трогает, запись на месте.
 		expect(content).toContain('  - 2026-08-12');
 	});
 
-	it('ошибка сброса чекбоксов при отмене не роняет календарь', async () => {
+	it('ошибка снятия галочки не роняет календарь', async () => {
 		vi.spyOn(console, 'error').mockImplementation(() => {});
 		const context = createPluginDouble({
 			files: {
@@ -1039,7 +1055,7 @@ describe('закрытые задачи в хвосте списка', () => {
 		await doneItems(wrapper)[0].find('input.task-list-item-checkbox').trigger('click');
 		await flushPromises();
 
-		expect(Notice.messages).toContain('Не удалось сбросить подзадачи');
+		expect(Notice.messages).toContain('Не удалось отметить подзадачу');
 		expect(doneItems(wrapper)).toHaveLength(1);
 	});
 
@@ -1170,7 +1186,6 @@ describe('реактивность файлов задач', () => {
 				link: 'Задачи/Генеральная уборка.md',
 				date: '2026-08-18',
 				body: '',
-				title: 'Генеральная уборка',
 			},
 		]);
 	});
@@ -1512,7 +1527,7 @@ describe('отметка из самой заметки', () => {
 		expect(hasTaskOn(wrapper, TODAY)).toBe(false);
 	});
 
-	it('снятая в файле галочка журнал не трогает', async () => {
+	it('снятая в файле галочка убирает день из «Выполнено»', async () => {
 		const { wrapper, vault } = await mountCalendar({
 			files: {
 				'Уборка.md': taskNoteText({ date: TODAY, done: [TODAY], body: '- [x] Раз' }),
@@ -1525,17 +1540,17 @@ describe('отметка из самой заметки', () => {
 		);
 		await settle();
 
-		// Выполнение живёт в журнале, а не в теле: снятая галочка ничего не
-		// отменяет, для этого есть хвост «Выполнено».
-		expect(vault.contentOf('Уборка.md')).toContain(`  - ${TODAY}`);
+		// Выполнение считается по чекбоксам: снятая галочка снова открывает день.
+		expect(vault.contentOf('Уборка.md')).not.toContain(`  - ${TODAY}`);
 
 		await settle();
-		expect(hasTaskOn(wrapper, TODAY)).toBe(false);
+		expect(hasTaskOn(wrapper, TODAY)).toBe(true);
 	});
 
-	it('убрали дату из «Выполнено» руками - чекбоксы сбросились', async () => {
-		const { wrapper, vault } = await mountCalendar({
+	it('закрытая разовая с отмеченным телом больше не переписывается', async () => {
+		const { app, wrapper } = await mountCalendar({
 			files: {
+				// Так выглядит закрытая разовая: день в журнале, тело отмечено целиком.
 				'Уборка.md': taskNoteText({
 					date: TODAY,
 					done: [TODAY],
@@ -1544,19 +1559,13 @@ describe('отметка из самой заметки', () => {
 			},
 		});
 
-		// Так выглядит правка свойств руками в редакторе.
-		await vault.modify(
-			new TFile('Уборка.md'),
-			taskNoteText({ date: TODAY, body: '- [x] Раз\n- [x] Два' })
-		);
+		await settle();
 		await settle();
 
-		const content = vault.contentOf('Уборка.md') ?? '';
-
-		expect(content).toContain('- [ ] Раз');
-		expect(content).toContain('- [ ] Два');
-		// Журнал пуст, чекбоксы сняты - задача снова невыполненная.
-		expect(hasTaskOn(wrapper, TODAY)).toBe(true);
+		// Журнал и тело сходятся - писать нечего. Иначе плагин ходил бы по кругу:
+		// закрыл, открыл, закрыл.
+		expect(app.fileManager.calls).toHaveLength(0);
+		expect(completedTasks(wrapper).map((task) => task.task)).toEqual(['Уборка']);
 	});
 
 	it('задача без чекбоксов журнал не теряет', async () => {
@@ -1864,31 +1873,15 @@ describe('просроченные задачи над списком дня', (
 		await settle();
 		await settle();
 
-		// День закрыт, карточка уехала на следующий долг - в теле галочек нет, и в
-		// разметке их быть не должно: показывать отмеченным нечего.
-		expect(vault.contentOf('Побриться.md')).toContain('  - 2026-08-11');
-		expect(vault.contentOf('Побриться.md')).not.toContain('[x]');
+		const content = vault.contentOf('Побриться.md') ?? '';
+
+		// Закрытый день оставил себе свой набор с галочкой, а под следующий повтор
+		// завёлся чистый - его и показывает карточка.
+		expect(content).toContain('  - 2026-08-11');
+		expect(content).toContain('- 2026-08-11\n\t- [x] Побриться');
+		expect(content).toContain('- 2026-08-12\n\t- [ ] Побриться');
 		expect(overdueTasks(wrapper)[0].date).toBe('2026-08-12');
-		expect((box().element as HTMLInputElement).checked).toBe(false);
-	});
-
-	it('галочка снимается сразу, не дожидаясь пересчёта', async () => {
-		const { wrapper } = await mountCalendar({
-			files: {
-				'Побриться.md': taskNoteText({
-					date: '2026-08-11',
-					repeat: 'каждый день',
-					body: '- [ ] Побриться',
-				}),
-			},
-		});
-
-		const box = () => overdueItems(wrapper)[0].find('input.task-list-item-checkbox');
-
-		await box().trigger('click');
-		await flushPromises();
-
-		// Пересчёт ещё не сработал - разметка уже показывает то, что записано в файл.
+		// Разметка карточки не должна остаться от прошлого дня - галочка снята.
 		expect((box().element as HTMLInputElement).checked).toBe(false);
 	});
 
@@ -1924,12 +1917,36 @@ describe('просроченные задачи над списком дня', (
 	});
 });
 
-describe('чекбоксы тела - черновик одного захода', () => {
+describe('чекбоксы по итерациям повтора', () => {
 	const withTask = (body: string, fixture = {}) => mountCalendar({
 		files: { 'Уборка.md': taskNoteText({ date: TODAY, body, ...fixture }) },
 	});
 
-	it('отметили все - день в журнале, а чекбоксы сброшены', async () => {
+	it('закрытие повтора раскладывает набор по дням', async () => {
+		const { wrapper, vault } = await withTask('- [ ] Раз\n- [ ] Два', {
+			repeat: 'каждый день',
+		});
+
+		await checkAll(wrapper);
+
+		const content = vault.contentOf('Уборка.md') ?? '';
+
+		expect(content).toContain(`  - ${TODAY}`);
+		// Закрытый день забрал себе отмеченный набор...
+		expect(content).toContain(`- ${TODAY}\n\t- [x] Раз\n\t- [x] Два`);
+		// ...а под следующий повтор завелась чистая копия.
+		expect(content).toContain('- 2026-08-14\n\t- [ ] Раз\n\t- [ ] Два');
+	});
+
+	it('метка блока - пункт с датой, а не заголовок', async () => {
+		const { wrapper, vault } = await withTask('- [ ] Раз', { repeat: 'каждый день' });
+
+		await checkAll(wrapper);
+
+		expect(vault.contentOf('Уборка.md')).not.toContain('## ');
+	});
+
+	it('у разовой задачи блоки не заводятся', async () => {
 		const { wrapper, vault } = await withTask('- [ ] Раз\n- [ ] Два');
 
 		await checkAll(wrapper);
@@ -1937,9 +1954,46 @@ describe('чекбоксы тела - черновик одного захода
 		const content = vault.contentOf('Уборка.md') ?? '';
 
 		expect(content).toContain(`  - ${TODAY}`);
-		expect(content).toContain('- [ ] Раз');
-		expect(content).toContain('- [ ] Два');
-		expect(content).not.toContain('[x]');
+		// Второго раза у разовой не будет - раскладывать по дням нечего.
+		// Второго раза у разовой не будет - блока с датой в теле не появилось.
+		expect(bodyOf(content)).toBe('- [x] Раз\n- [x] Два');
+	});
+
+	it('снятая галочка снова открывает день', async () => {
+		const { wrapper, vault } = await withTask('- [ ] Раз\n- [ ] Два');
+
+		await checkAll(wrapper);
+		expect(hasTaskOn(wrapper, TODAY)).toBe(false);
+
+		await doneItems(wrapper)[0].findAll('input.task-list-item-checkbox')[1].trigger('click');
+		await settle();
+
+		expect(vault.contentOf('Уборка.md')).not.toContain(`  - ${TODAY}`);
+		expect(hasTaskOn(wrapper, TODAY)).toBe(true);
+		// Отметку о сделанном при этом не потеряли.
+		expect(vault.contentOf('Уборка.md')).toContain('- [x] Раз');
+	});
+
+	it('журнал в свойствах за блоки итераций не принимается', async () => {
+		const { wrapper, vault } = await mountCalendar({
+			files: {
+				// Строка «  - 2026-08-12» в свойствах выглядит ровно как метка блока.
+				'Уборка.md': taskNoteText({
+					date: '2026-08-12',
+					done: ['2026-08-12'],
+					repeat: 'каждый день',
+					body: '- [ ] Раз',
+				}),
+			},
+		});
+
+		await wrapper.find('input.task-list-item-checkbox').trigger('click');
+		await settle();
+
+		const content = vault.contentOf('Уборка.md') ?? '';
+
+		// Блок должен появиться один - под сегодняшний день, а не вокруг журнала.
+		expect(bodyBlockDates(bodyOf(content))).toEqual([TODAY, '2026-08-14']);
 	});
 
 	it('частичная отметка в теле остаётся - сбрасывает только закрытие', async () => {
@@ -1993,29 +2047,6 @@ describe('чекбоксы тела - черновик одного захода
 		expect(content.split('- [ ] Раз')).toHaveLength(2);
 	});
 
-	it('не вышло сбросить чекбоксы - день не закрывается', async () => {
-		vi.spyOn(console, 'error').mockImplementation(() => {});
-		const context = createPluginDouble({
-			files: {
-				// Отмечено всё - сверка с телом захочет закрыть день.
-				'Уборка.md': taskNoteText({
-					date: '2026-08-11',
-					repeat: 'каждый день',
-					body: '- [x] Раз',
-				}),
-			},
-		});
-		context.vault.failures.modify = new Set(['Уборка.md']);
-
-		mount(TaskCalendar, { props: { plugin: context.plugin } });
-		await flushPromises();
-
-		expect(Notice.messages).toContain('Не удалось сбросить подзадачи');
-		// В журнал не полезли вовсе: иначе следующий скан закрыл бы ещё один день
-		// - и так до конца череды повторов.
-		expect(context.app.fileManager.calls).toHaveLength(0);
-	});
-
 	it('отмена сбрасывает чекбоксы, даже если их успели наставить снова', async () => {
 		const { wrapper, vault } = await mountCalendar({
 			files: {
@@ -2037,32 +2068,32 @@ describe('чекбоксы тела - черновик одного захода
 	});
 });
 
-describe('старые заметки с блоками «## дата»', () => {
+describe('старые блоки-заголовки «## дата»', () => {
 	const legacy = taskNoteText({
-		date: '2026-08-11',
+		date: '2026-08-12',
+		// Журнал согласован с телом: 12 августа закрыт, сегодняшний день открыт.
+		done: ['2026-08-12'],
 		repeat: 'каждый день',
 		body: [
-			'## 2026-08-11',
+			'## 2026-08-12',
 			'- [x] Раз',
 			'- [x] Два',
 			'',
-			'## 2026-08-12',
+			`## ${TODAY}`,
 			'- [ ] Раз',
 			'- [ ] Два',
 		].join('\n'),
 	});
 
-	it('в карточке показывается один набор, а не все блоки разом', async () => {
+	it('в карточке показывается блок своего дня', async () => {
 		const { wrapper } = await mountCalendar({ files: { 'Уборка.md': legacy } });
 
-		await clickDay(wrapper, TODAY);
-
-		// Без сворачивания здесь было бы четыре чекбокса из двух блоков.
+		// Без разбора старой метки здесь было бы четыре чекбокса из двух блоков.
 		expect(pendingItems(wrapper)[0].findAll('input.task-list-item-checkbox'))
 			.toHaveLength(2);
 	});
 
-	it('первая же галочка сворачивает блоки в файле', async () => {
+	it('галочка правит блок своего дня', async () => {
 		const { wrapper, vault } = await mountCalendar({ files: { 'Уборка.md': legacy } });
 
 		await pendingItems(wrapper)[0].find('input.task-list-item-checkbox').trigger('click');
@@ -2070,9 +2101,17 @@ describe('старые заметки с блоками «## дата»', () => 
 
 		const content = vault.contentOf('Уборка.md') ?? '';
 
-		expect(content).not.toContain('## 2026-08-11');
-		expect(content).not.toContain('## 2026-08-12');
-		expect(content).toContain('- [x] Раз');
-		expect(content).toContain('- [ ] Два');
+		expect(content).toContain('## 2026-08-12\n- [x] Раз\n- [x] Два');
+		expect(content).toContain(`## ${TODAY}\n- [x] Раз\n- [ ] Два`);
+	});
+
+	it('новый блок пишется пунктом, а не заголовком', async () => {
+		const { wrapper, vault } = await mountCalendar({ files: { 'Уборка.md': legacy } });
+
+		await checkAll(wrapper);
+
+		// Старые заголовки остаются как были - переписывать заметку незачем.
+		expect(vault.contentOf('Уборка.md')).toContain(`## ${TODAY}`);
+		expect(vault.contentOf('Уборка.md')).toContain('- 2026-08-14\n\t- [ ] Раз');
 	});
 });
