@@ -1,11 +1,19 @@
-import { Plugin, WorkspaceLeaf } from 'obsidian';
+import { Plugin, WorkspaceLeaf, debounce } from 'obsidian';
 import { TaskCalendarSettingTab } from './settings';
+import { TaskMap } from './taskMap';
 import { DEFAULT_SETTINGS, TaskCalendarSettings, VIEW_TYPE_TASK_CALENDAR } from './types';
 import { TaskCalendarView } from './views/TaskCalendarView';
 
 export default class TaskCalendarPlugin extends Plugin {
 	// @ts-ignore
 	settings: TaskCalendarSettings;
+
+	/**
+	 * Индекс задач. Живёт в плагине, а не в календаре: автоматика чекбокса должна
+	 * срабатывать и при закрытой вкладке - галку ставят и руками в заметке.
+	 */
+	// @ts-ignore
+	taskMap: TaskMap;
 
 	/** Слушатели изменения настроек: открытые календари перечитывают задачи. */
 	private settingsListeners = new Set<() => void>();
@@ -25,6 +33,17 @@ export default class TaskCalendarPlugin extends Plugin {
 
 	async onload() {
 		await this.loadSettings();
+
+		this.taskMap = new TaskMap(this);
+
+		// Сменили папку в настройках - пересобираем карту. Вкладка настроек пишет
+		// на каждый символ, поэтому пересбор откладывается.
+		const rescan = debounce(() => { void this.taskMap.refresh(); }, 300, true);
+		this.onSettingsChange(rescan);
+
+		// Индексация после того, как Obsidian достроил интерфейс: до этого список
+		// файлов хранилища ещё неполный.
+		this.app.workspace.onLayoutReady(() => { void this.taskMap.start(); });
 
 		this.addSettingTab(new TaskCalendarSettingTab(this.app, this));
 
@@ -53,7 +72,9 @@ export default class TaskCalendarPlugin extends Plugin {
 		});
 	}
 
-	onunload() {}
+	onunload() {
+		this.taskMap.stop();
+	}
 
 	async openCalendar() {
 		const { workspace } = this.app;

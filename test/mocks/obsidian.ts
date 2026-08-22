@@ -73,7 +73,7 @@ export class Vault {
 	private handlers = new Map<string, Set<VaultHandler>>();
 
 	/** Счётчики вызовов - тестам удобнее, чем оборачивать методы шпионами. */
-	readonly calls = { read: 0, cachedRead: 0, create: 0, modify: 0 };
+	readonly calls = { read: 0, cachedRead: 0, create: 0, modify: 0, process: 0 };
 	readonly failures: VaultFailures = {};
 
 	constructor(files: Record<string, string> = {}, folders: string[] = []) {
@@ -145,9 +145,42 @@ export class Vault {
 		this.trigger('modify', file);
 	}
 
+	/**
+	 * Атомарная правка файла: колбэк получает свежее содержимое и возвращает
+	 * новое. Настоящий process пишет всегда, даже если текст не изменился, -
+	 * здесь так же, иначе защита от цикла «запись -> событие -> запись» в тестах
+	 * не проверялась бы.
+	 */
+	async process(file: TFile, fn: (data: string) => string): Promise<string> {
+		this.calls.process++;
+		if (this.failures.modify?.has(file.path)) {
+			throw new Error(`process failed: ${file.path}`);
+		}
+		const content = this.files.get(file.path);
+		if (content === undefined) throw new Error(`ENOENT: ${file.path}`);
+
+		const next = fn(content);
+		this.files.set(file.path, next);
+		this.trigger('modify', new TFile(file.path));
+
+		return next;
+	}
+
+	async createFolder(path: string): Promise<TFolder> {
+		if (this.folders.has(path)) throw new Error(`Folder already exists: ${path}`);
+		this.folders.add(path);
+
+		return new TFolder(path);
+	}
+
 	/** Содержимое файла - для проверок в тестах. */
 	contentOf(path: string): string | undefined {
 		return this.files.get(path);
+	}
+
+	/** Все пути файлов - для проверок в тестах. */
+	paths(): string[] {
+		return [...this.files.keys()];
 	}
 
 	/** Перемещение и переименование - в Obsidian это одна операция. */
@@ -167,6 +200,33 @@ export class Vault {
 	async delete(file: TFile): Promise<void> {
 		this.files.delete(file.path);
 		this.trigger('delete', file);
+	}
+
+	/**
+	 * Удаление папки. Obsidian шлёт одно событие на саму папку, а не на каждый
+	 * файл внутри - здесь так же, иначе пропажа папки в тестах выглядела бы
+	 * добрее, чем в жизни.
+	 */
+	async deleteFolder(path: string): Promise<void> {
+		for (const filePath of [...this.files.keys()]) {
+			if (filePath.startsWith(`${path}/`)) this.files.delete(filePath);
+		}
+		this.folders.delete(path);
+		this.trigger('delete', new TFolder(path));
+	}
+
+	/** Перемещение папки: одно событие на папку со старым путём. */
+	async renameFolder(path: string, newPath: string): Promise<void> {
+		for (const filePath of [...this.files.keys()]) {
+			if (!filePath.startsWith(`${path}/`)) continue;
+
+			const content = this.files.get(filePath) as string;
+			this.files.delete(filePath);
+			this.files.set(newPath + filePath.slice(path.length), content);
+		}
+		this.folders.delete(path);
+		this.folders.add(newPath);
+		this.trigger('rename', new TFolder(newPath), path);
 	}
 
 	on(event: VaultEvent, handler: VaultHandler): EventRef {

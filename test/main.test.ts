@@ -2,13 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises } from '@vue/test-utils';
 import TaskCalendarPlugin from '../src/TaskCalendarPlugin';
 import { DEFAULT_SETTINGS } from '../src/types';
-import { App, Platform, Setting, WorkspaceLeaf } from './mocks/obsidian';
-import { useFixedClock } from './helpers';
+import { App, Platform, Setting, Vault, WorkspaceLeaf } from './mocks/obsidian';
+import { taskFileText, TODAY, useFixedClock } from './helpers';
 
 const VIEW_TYPE = 'task-calendar';
 
-const createPlugin = (savedData: unknown = null) => {
-	const app = new App();
+const createPlugin = (savedData: unknown = null, vault = new Vault()) => {
+	const app = new App(vault);
 	const plugin = new TaskCalendarPlugin(app as never, {} as never);
 	(plugin as unknown as { savedData: unknown }).savedData = savedData;
 
@@ -265,16 +265,19 @@ describe('жизненный цикл view', () => {
 		expect(body.querySelectorAll('.task__calendar-container')).toHaveLength(1);
 	});
 
-	it('закрытие снимает подписки на события хранилища', async () => {
+	it('закрытие вкладки подписки карты не снимает', async () => {
 		const { app, view } = await createView();
+
+		app.workspace.triggerLayoutReady();
+		await flushPromises();
 
 		await view.onOpen();
 		await flushPromises();
-		expect(app.vault.handlerCount('modify')).toBe(1);
-
 		await view.onClose();
 
-		expect(app.vault.handlerCount('modify')).toBe(0);
+		// Карта живёт в плагине: автоматика чекбокса должна работать и при
+		// закрытом календаре - галку ставят и руками в заметке.
+		expect(app.vault.handlerCount('modify')).toBe(1);
 	});
 
 	it('повторное закрытие безопасно', async () => {
@@ -285,6 +288,72 @@ describe('жизненный цикл view', () => {
 		await view.onClose();
 
 		await expect(view.onClose()).resolves.toBeUndefined();
+	});
+});
+
+describe('карта задач', () => {
+	const withTasks = () => new Vault({
+		'Задачи/дело.md': taskFileText({ date: TODAY }),
+		'Другое/чужое.md': taskFileText({ date: TODAY }),
+	});
+
+	it('до готовности интерфейса хранилище не читается', async () => {
+		const { app, plugin } = createPlugin(null, withTasks());
+
+		await plugin.onload();
+
+		expect(app.vault.handlerCount('modify')).toBe(0);
+		expect(plugin.taskMap.all()).toHaveLength(0);
+	});
+
+	it('onLayoutReady поднимает карту и подписки', async () => {
+		const { app, plugin } = createPlugin({ tasksFolderPath: '/Задачи' }, withTasks());
+		await plugin.onload();
+
+		app.workspace.triggerLayoutReady();
+		await flushPromises();
+
+		expect(plugin.taskMap.all().map((task) => task.key)).toEqual(['/Задачи/дело.md#0']);
+		expect(app.vault.handlerCount('modify')).toBe(1);
+		expect(app.vault.handlerCount('create')).toBe(1);
+		expect(app.vault.handlerCount('delete')).toBe(1);
+		expect(app.vault.handlerCount('rename')).toBe(1);
+	});
+
+	it('индексация ничего не пишет в хранилище', async () => {
+		const { app, plugin } = createPlugin({ tasksFolderPath: '/Задачи' }, withTasks());
+		await plugin.onload();
+
+		app.workspace.triggerLayoutReady();
+		await flushPromises();
+
+		expect(app.vault.calls.process).toBe(0);
+		expect(app.vault.calls.modify).toBe(0);
+	});
+
+	it('onunload снимает подписки', async () => {
+		const { app, plugin } = createPlugin(null, withTasks());
+		await plugin.onload();
+		app.workspace.triggerLayoutReady();
+		await flushPromises();
+
+		plugin.onunload();
+
+		expect(app.vault.handlerCount('modify')).toBe(0);
+		expect(app.vault.handlerCount('rename')).toBe(0);
+	});
+
+	it('смена папки в настройках пересобирает карту', async () => {
+		const { app, plugin } = createPlugin({ tasksFolderPath: '/Задачи' }, withTasks());
+		await plugin.onload();
+		app.workspace.triggerLayoutReady();
+		await flushPromises();
+
+		plugin.settings.tasksFolderPath = '/Другое';
+		await plugin.saveSettings();
+		await vi.advanceTimersByTimeAsync(300);
+
+		expect(plugin.taskMap.all().map((task) => task.key)).toEqual(['/Другое/чужое.md#0']);
 	});
 });
 

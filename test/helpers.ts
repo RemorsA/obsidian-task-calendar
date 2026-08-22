@@ -1,5 +1,6 @@
 import { vi } from 'vitest';
 import { App, Vault } from './mocks/obsidian';
+import { TaskMap } from '../src/taskMap';
 import type TaskCalendarPlugin from '../src/TaskCalendarPlugin';
 
 /**
@@ -18,39 +19,44 @@ export const useFixedClock = (date = `${TODAY}T12:00:00`): void => {
 	vi.setSystemTime(new Date(date));
 };
 
-export interface TaskNoteFixture {
-	date?: string | null;
-	done?: string[];
+export interface TaskBlockFixture {
+	/** 📅 - обязательный параметр блока. */
+	date?: string;
+	/** ↔️ - перемещённая дата. */
+	move?: string | null;
+	/** 🔁 - текст повтора. */
 	repeat?: string | null;
-	/** Свойство «Стоп повтор» - пишется, только если передано. */
-	stopped?: boolean;
-	body?: string;
+	/** ✅ - отметка выполнения. */
+	done?: string | null;
+	/** Строки тела без отступа - таб добавляется сам. */
+	body?: string[];
 }
 
+/** Строки одного блока задачи в каноническом порядке параметров. */
+export const taskBlockLines = (block: TaskBlockFixture = {}): string[] => {
+	const lines = [`- 📅 ${block.date ?? TODAY}`];
+
+	if (block.move) lines.push(`- ↔️ ${block.move}`);
+	if (block.repeat) lines.push(`- 🔁 ${block.repeat}`);
+	if (block.done) lines.push(`- ✅ ${block.done}`);
+
+	for (const line of block.body ?? ['- [ ] Задача']) lines.push(`\t${line}`);
+
+	return lines;
+};
+
 /**
- * Текст заметки-задачи со свойствами - как их пишет Obsidian.
- *
- * Наименования задачи среди свойств нет: оно берётся из имени файла, поэтому в
- * тестах имя файла и есть название задачи.
+ * Текст файла задачи: блоки подряд, пустая строка в начале и в конце - ровно
+ * так, как файл пишет сам плагин.
  */
-export const taskNoteText = ({
-	date = null,
-	done = [],
-	repeat = null,
-	stopped,
-	body = '',
-}: TaskNoteFixture = {}): string => {
-	const lines = ['---', `Дата: ${date ?? ''}`.trimEnd()];
+export const taskFileText = (...blocks: TaskBlockFixture[]): string => {
+	const lines: string[] = [''];
 
-	lines.push('Выполнено:');
-	for (const doneDate of done) lines.push(`  - ${doneDate}`);
+	for (const block of (blocks.length > 0 ? blocks : [{}])) lines.push(...taskBlockLines(block));
 
-	lines.push(`Повтор: ${repeat ?? ''}`.trimEnd());
-	if (stopped !== undefined) lines.push(`Стоп повтор: ${stopped}`);
-	lines.push('---');
-	if (body) lines.push('', body);
+	lines.push('');
 
-	return `${lines.join('\n')}\n`;
+	return lines.join('\n');
 };
 
 export interface PluginDoubleOptions {
@@ -66,13 +72,14 @@ export interface PluginDouble {
 	plugin: TaskCalendarPlugin;
 	app: App;
 	vault: Vault;
+	taskMap: TaskMap;
 	/** Сменить настройку и уведомить подписчиков - как делает вкладка настроек. */
 	changeTasksFolderPath: (path: string) => void;
 	/** Сколько подписчиков на настройки живо - для проверки отписки. */
 	settingsListenerCount: () => number;
 }
 
-/** Плагин-двойник: компоненту нужны settings, app и подписка на настройки. */
+/** Плагин-двойник: карте задач нужны app и settings, компоненту - ещё и карта. */
 export const createPluginDouble = ({
 	files = {},
 	folders = [],
@@ -93,6 +100,9 @@ export const createPluginDouble = ({
 		},
 	} as unknown as TaskCalendarPlugin;
 
+	const taskMap = new TaskMap(plugin);
+	plugin.taskMap = taskMap;
+
 	const changeTasksFolderPath = (path: string): void => {
 		plugin.settings.tasksFolderPath = path;
 		for (const listener of listeners) listener();
@@ -102,6 +112,7 @@ export const createPluginDouble = ({
 		plugin,
 		app,
 		vault: app.vault,
+		taskMap,
 		changeTasksFolderPath,
 		settingsListenerCount: () => listeners.size,
 	};

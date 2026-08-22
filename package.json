@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-task-calendar",
-	"version": "2.0.0",
+	"version": "3.0.0",
 	"description": "Creating and viewing tasks via the calendar.",
 	"main": "main.js",
 	"scripts": {
@@ -15,7 +15,7 @@
 	"author": "Remorse",
 	"license": "MIT",
 	"devDependencies": {
-		"@types/node": "^16.11.6",
+		"@types/node": "^26.2.0",
 		"@typescript-eslint/eslint-plugin": "5.29.0",
 		"@typescript-eslint/parser": "5.29.0",
 		"@vitejs/plugin-vue": "^5.2.4",
