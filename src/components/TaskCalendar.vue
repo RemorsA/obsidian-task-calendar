@@ -281,6 +281,10 @@ const isToday = (date: string): boolean => date === todayStr.value;
 /**
  * Дни, у которых в файле уже есть свой блок. Череда их перескакивает: такой день
  * показывает свой блок, а не расчёт, иначе на нём было бы две карточки.
+ *
+ * Занятыми считаются обе даты блока: 📅 - его место в череде, ↔️ - его место в
+ * календаре. Тем же правилом пользуется генерация в карте, поэтому точки и файл
+ * не расходятся.
  */
 const takenDays = computed<Map<string, Set<string>>>(() => {
 	const byFile = new Map<string, Set<string>>();
@@ -290,6 +294,7 @@ const takenDays = computed<Map<string, Set<string>>>(() => {
 		const days = byFile.get(path) ?? new Set<string>();
 
 		days.add(showDate(task));
+		days.add(task.date);
 		byFile.set(path, days);
 	}
 

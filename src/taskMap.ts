@@ -50,15 +50,22 @@ interface BlockState {
 }
 
 /**
- * Дни, у которых в файле уже есть свой блок. Считаются по дате показа - по ней
- * блок стоит в календаре, и второй блок на этот день дал бы вторую карточку.
+ * Дни, у которых в файле уже есть свой блок. Череда их перескакивает.
+ *
+ * Занятыми считаются **обе даты блока**: 📅 - его место в череде, ↔️ - его место
+ * в календаре. Перенесли повтор с субботы на пятницу и закрыли - суббота тоже
+ * занята, этот повтор уже отработан, и череда обязана шагнуть на следующую.
+ * Иначе она возвращалась бы ровно на тот день, с которого её увели.
  */
 const takenDays = (blocks: ParsedBlock[]): Set<string> => {
 	const days = new Set<string>();
 
 	for (const block of blocks) {
-		const day = blockBase(block);
-		if (day) days.add(day);
+		const shown = blockBase(block);
+		const own = normalizeDate(block.params.date?.value);
+
+		if (shown) days.add(shown);
+		if (own) days.add(own);
 	}
 
 	return days;

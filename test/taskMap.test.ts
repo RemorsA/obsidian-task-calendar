@@ -625,6 +625,43 @@ describe('карта задач', () => {
 			expect(double.vault.contentOf('note.md')).not.toContain('↔️');
 		});
 
+		it('перенос назад: череда пропускает день, с которого перенесли', async () => {
+			await setup({
+				files: {
+					'note.md': taskFileText({
+						date: '2026-08-22',
+						move: '2026-08-21',
+						repeat: 'Каждую неделю в Субботу',
+						body: ['- [ ] Полить фикус'],
+					}),
+				},
+			});
+
+			await map.toggleCheckbox('/note.md#0', 0);
+
+			// Суббота 22-го уже отработана этим блоком, пусть и на день раньше.
+			expect(double.vault.contentOf('note.md')).toContain('- 📅 2026-08-29');
+			expect(map.all().find((task) => task.repeat !== null)?.date).toBe('2026-08-29');
+		});
+
+		it('перенос вперёд череду не задваивает', async () => {
+			await setup({
+				files: {
+					'note.md': taskFileText({
+						date: '2026-08-22',
+						move: '2026-08-23',
+						repeat: 'Каждый день',
+						body: ['- [ ] Дело'],
+					}),
+				},
+			});
+
+			await map.toggleCheckbox('/note.md#0', 0);
+
+			// 22-е и 23-е заняты этим же блоком - следующий день 24-е.
+			expect(map.all().find((task) => task.repeat !== null)?.date).toBe('2026-08-24');
+		});
+
 		it('имя файла при переносе не меняется', async () => {
 			await setup({
 				files: { 'Задачи/2026-08-13 - Дело.md': taskFileText({ date: '2026-08-13' }) },

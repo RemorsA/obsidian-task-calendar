@@ -451,6 +451,26 @@ describe('череда повтора в календаре', () => {
 		expect(hasDot(wrapper, '2026-08-30')).toBe(true);
 	});
 
+	it('после переноса назад точка встаёт на следующий повтор, а не на прежний день', async () => {
+		const { wrapper } = await mountCalendar({
+			files: {
+				'note.md': taskFileText({
+					date: '2026-08-22',
+					move: '2026-08-21',
+					repeat: 'Каждую неделю в Субботу',
+					body: ['- [ ] Полить фикус'],
+				}),
+			},
+		});
+
+		await clickDay(wrapper, '2026-08-21');
+		await wrapper.find('input.task-list-item-checkbox').trigger('click');
+		await flushPromises();
+
+		expect(hasDot(wrapper, '2026-08-22')).toBe(false);
+		expect(hasDot(wrapper, '2026-08-29')).toBe(true);
+	});
+
 	it('просроченная задача расчётной карточкой не задваивается', async () => {
 		const { wrapper } = await mountCalendar({
 			files: {
