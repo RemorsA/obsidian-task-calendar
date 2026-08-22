@@ -192,11 +192,18 @@ describe('nextDate - тест-кейсы раздела 11', () => {
 });
 
 describe('череда повтора в окне', () => {
-	const days = (repeat: string, base: string, from: string, to: string, limit?: number) => {
+	const days = (
+		repeat: string,
+		base: string,
+		from: string,
+		to: string,
+		taken?: ReadonlySet<string>,
+		limit?: number
+	) => {
 		const parsed = parseRepeat(repeat);
 		if (!parsed) throw new Error(`не разобрался повтор: ${repeat}`);
 
-		return occurrencesInRange(base, parsed, from, to, limit);
+		return occurrencesInRange(base, parsed, from, to, taken, limit);
 	};
 
 	it('дни недельного повтора по субботам и воскресеньям', () => {

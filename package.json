@@ -15,7 +15,7 @@
 	"author": "Remorse",
 	"license": "MIT",
 	"devDependencies": {
-		"@types/node": "^26.2.0",
+		"@types/node": "^16.18.126",
 		"@typescript-eslint/eslint-plugin": "5.29.0",
 		"@typescript-eslint/parser": "5.29.0",
 		"@vitejs/plugin-vue": "^5.2.4",
@@ -24,6 +24,7 @@
 		"builtin-modules": "3.3.0",
 		"esbuild": "0.17.3",
 		"esbuild-plugin-vue3": "^0.5.1",
+		"eslint": "^8.57.1",
 		"jsdom": "^25.0.1",
 		"moment": "^2.30.1",
 		"obsidian": "latest",

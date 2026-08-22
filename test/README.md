@@ -7,8 +7,11 @@ npm run typecheck  # tsc -noEmit (только .ts, .vue он не провер�
 ```
 
 Раннер - vitest 2 + jsdom + @vue/test-utils. Версии подобраны под Node 18:
-vite 5 и vitest 2, выше требуют Node 20+. Установка делалась с
-`--legacy-peer-deps` из-за `@types/node` в devDependencies.
+vite 5 и vitest 2, выше требуют Node 20+. Установка - с `--legacy-peer-deps`:
+плоский `npm install` упирается в конфликт peer-зависимостей vite и vitest.
+
+`@types/node` держим на 16: TypeScript 4.7 не разбирает `.d.ts` новых версий, и
+`npm run typecheck` встаёт целиком - вместе с ним падает и проверка типов тестов.
 
 ## Что где
 
