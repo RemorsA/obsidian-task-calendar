@@ -131,6 +131,10 @@
 					открывается по showPicker() и сам знает, как выглядеть на телефоне
 					и на ПК. Поле рядом с кнопкой, а не спрятано насовсем: невидимому
 					элементу showPicker() открыть нечего.
+
+					Кнопка есть у любой карточки, в том числе на расчётном дне череды:
+					уезжает **день карточки**, а что при этом происходит с чередой,
+					решает карта.
 				-->
 				<div class="tasks__item-date">
 					<button
@@ -147,7 +151,7 @@
 						tabindex="-1"
 						aria-hidden="true"
 						:value="card.date"
-						@change="handleChangeTaskDate(card.task, $event)"
+						@change="handleChangeTaskDate(card, $event)"
 					>
 				</div>
 
@@ -199,8 +203,9 @@ interface TaskCard {
 	task: Task;
 	modifier: string;
 	/**
-	 * День карточки. У задач дня, просроченных и выполненных это дата показа
-	 * задачи, у расчётного дня череды - сам этот день: отметка закроет его.
+	 * День карточки. У задач дня, просроченных и выполненных это день показа
+	 * задачи (↔️, если экземпляр переносили, иначе 📅), у расчётного дня череды -
+	 * сам этот день: отметка закроет его.
 	 */
 	date: string;
 }
@@ -280,11 +285,8 @@ const isToday = (date: string): boolean => date === todayStr.value;
 
 /**
  * Дни, у которых в файле уже есть свой блок. Череда их перескакивает: такой день
- * показывает свой блок, а не расчёт, иначе на нём было бы две карточки.
- *
- * Занятыми считаются обе даты блока: 📅 - его место в череде, ↔️ - его место в
- * календаре. Тем же правилом пользуется генерация в карте, поэтому точки и файл
- * не расходятся.
+ * показывает свой блок, а не расчёт, иначе на нём было бы две карточки. Тем же
+ * правилом пользуется генерация в карте, поэтому точки и файл не расходятся.
  */
 const takenDays = computed<Map<string, Set<string>>>(() => {
 	const byFile = new Map<string, Set<string>>();
@@ -293,8 +295,10 @@ const takenDays = computed<Map<string, Set<string>>>(() => {
 		const path = taskVaultPath(task);
 		const days = byFile.get(path) ?? new Set<string>();
 
-		days.add(showDate(task));
+		// Оба дня перенесённого экземпляра: 📅 - день череды, с которого он уехал,
+		// ↔️ - день показа. Череда не возвращается ни туда, ни туда.
 		days.add(task.date);
+		days.add(showDate(task));
 		byFile.set(path, days);
 	}
 
@@ -314,11 +318,11 @@ const repeatDays = (task: Task, from: string, to: string): string[] => {
 
 	const taken = takenDays.value.get(taskVaultPath(task));
 
-	return occurrencesInRange(showDate(task), repeat, from, to, taken);
+	return occurrencesInRange(task.date, repeat, from, to, taken);
 };
 
 /**
- * Дни с невыполненными задачами: точка в сетке. Дата точки - `↔️ ?? 📅`, плюс
+ * Дни с невыполненными задачами: точка в сетке. Дата точки - 📅 задачи, плюс
  * расчётные дни череды повтора. До 📅 задачи не существовало - туда череда не
  * заглядывает.
  */
@@ -485,14 +489,15 @@ const handleClickTaskDate = (event: MouseEvent): void => {
 };
 
 /**
- * Перенести задачу на выбранную дату. Задаче с 🔁 карта пишет ↔️, задаче без
- * повтора двигает саму 📅 - решает это карта, здесь только новая дата.
+ * Перенести задачу на выбранную дату. Что при этом происходит с чередой, решает
+ * карта - здесь только новая дата и день карточки: переносят расчётный день
+ * череды или день самого блока, отсюда это одно и то же движение.
  */
-const handleChangeTaskDate = async (task: Task, event: Event): Promise<void> => {
+const handleChangeTaskDate = async (card: TaskCard, event: Event): Promise<void> => {
 	const value = (event.target as HTMLInputElement).value;
 	if (!value) return;
 
-	await taskMap.moveTask(task.key, value);
+	await taskMap.moveTask(card.task.key, value, card.date);
 };
 
 /**

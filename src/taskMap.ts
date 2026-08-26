@@ -3,7 +3,8 @@ import type TaskCalendarPlugin from './TaskCalendarPlugin';
 import {
 	allChecked,
 	applyEdits,
-	blockBase,
+	blockDate,
+	blockShow,
 	blockAppendAt,
 	blockShape,
 	isValidBlock,
@@ -11,8 +12,10 @@ import {
 	DATE_FORMAT,
 	Edit,
 	nextFreeDate,
+	movedBlockLines,
 	normalizeDate,
 	occurrenceBlockLines,
+	clearChecksEdits,
 	ParamName,
 	ParsedBlock,
 	parseBlocks,
@@ -21,6 +24,7 @@ import {
 	removeParamEdit,
 	repeatBlockLines,
 	setParamEdit,
+	showDate,
 	Task,
 	taskFileName,
 	taskVaultPath,
@@ -50,22 +54,22 @@ interface BlockState {
 }
 
 /**
- * Дни, у которых в файле уже есть свой блок. Череда их перескакивает.
+ * Дни, у которых в файле уже есть свой блок. Череда их перескакивает: такой день
+ * держит свой блок, и второй на нём дал бы вторую карточку.
  *
- * Занятыми считаются **обе даты блока**: 📅 - его место в череде, ↔️ - его место
- * в календаре. Перенесли повтор с субботы на пятницу и закрыли - суббота тоже
- * занята, этот повтор уже отработан, и череда обязана шагнуть на следующую.
- * Иначе она возвращалась бы ровно на тот день, с которого её увели.
+ * Занятыми считаются оба дня перенесённого блока: 📅 - день череды, с которого он
+ * уехал, ↔️ - день, на котором он теперь показывается. Череда не должна вернуться
+ * ни туда, ни туда.
  */
 const takenDays = (blocks: ParsedBlock[]): Set<string> => {
 	const days = new Set<string>();
 
 	for (const block of blocks) {
-		const shown = blockBase(block);
-		const own = normalizeDate(block.params.date?.value);
-
-		if (shown) days.add(shown);
+		const own = blockDate(block);
 		if (own) days.add(own);
+
+		const show = blockShow(block);
+		if (show) days.add(show);
 	}
 
 	return days;
@@ -395,7 +399,7 @@ export class TaskMap {
 
 			// Повтора нет - задача просто закрылась.
 			const repeat = parseRepeat(block.params.repeat?.value);
-			const base = blockBase(block);
+			const base = blockDate(block);
 			const next = repeat && base ? nextFreeDate(base, repeat, taken) : null;
 			if (!next) continue;
 
@@ -484,8 +488,9 @@ export class TaskMap {
 			const block = blocks.find((item) => item.index === blockIndex);
 			if (!block) return null;
 
-			// Отметили расчётный день череды - заводим блок этого дня.
-			if (showOn && normalizeDate(showOn) && showOn !== blockBase(block)) {
+			// Отметили расчётный день череды - заводим блок этого дня. Сравнение с
+			// днём показа: у перенесённого блока это ↔️, а не 📅.
+			if (showOn && normalizeDate(showOn) && showOn !== blockShow(block)) {
 				const fragment = this.occurrenceLines(lines, block, showOn, index);
 
 				return fragment
@@ -535,22 +540,79 @@ export class TaskMap {
 	/**
 	 * Перенести задачу на другой день.
 	 *
-	 * У задачи с 🔁 пишется ↔️ - череда повтора считается от неподвижной 📅.
-	 * У задачи без повтора двигается сама 📅: отдельная перемещённая дата ей не
-	 * нужна.
+	 * Блок без 🔁 - один экземпляр, ему просто меняется дата: перенесённому ↔️,
+	 * обычному 📅.
+	 *
+	 * У блока цепочки перенос - это **вынести один экземпляр из череды**: в конец
+	 * файла встаёт отдельный блок, у которого 📅 - день череды, с которого экземпляр
+	 * уехал, а ↔️ - день показа. Так уехавший день остаётся занятым и череда его
+	 * перескакивает, а точка в календаре переезжает на новую дату.
+	 *
+	 * `from` - день карточки, с которой пришёл перенос. Совпадает с днём показа
+	 * блока - уезжает сам блок, и цепочке нужен новый день: этот теперь занят
+	 * перенесённым экземпляром, а тело едет вместе с уже поставленными галочками -
+	 * это тот же экземпляр, просто в другой день. Отличается - переносят **расчётный
+	 * день череды**: у него заводится свой блок с чистым телом, а блок цепочки
+	 * остаётся как был.
 	 */
-	async moveTask(key: string, date: string): Promise<void> {
+	async moveTask(key: string, date: string, from?: string): Promise<void> {
 		const task = this.byKey(key);
 		if (!task || !normalizeDate(date)) return;
 
-		const name: ParamName = task.repeat ? 'move' : 'date';
+		// День карточки: у расчётного дня череды он свой, у обычной - день показа.
+		const day = normalizeDate(from) ?? showDate(task);
+		// Тот же день - писать нечего: vault.process тронул бы файл впустую.
+		if (day === date) return;
 
 		await this.edit(key, (content, blockIndex) => {
 			const lines = content.split('\n');
-			const block = parseBlocks(lines).find((item) => item.index === blockIndex);
+			const blocks = parseBlocks(lines);
+			const block = blocks.find((item) => item.index === blockIndex);
 			if (!block) return null;
 
-			return applyEdits(lines, [setParamEdit(block, name, date)]).join('\n');
+			const own = blockDate(block);
+			const show = blockShow(block);
+			if (!own || !show) return null;
+
+			const repeat = parseRepeat(block.params.repeat?.value);
+
+			if (!repeat) {
+				if (show === date) return null;
+
+				const name: ParamName = block.params.move ? 'move' : 'date';
+
+				return applyEdits(lines, [setParamEdit(block, name, date)]).join('\n');
+			}
+
+			const taken = takenDays(blocks);
+			taken.add(date);
+			taken.add(day);
+
+			// Уехал день самого блока - экземпляр забирает и день, и отметки.
+			// Уехал расчётный день череды - у него заводится свой блок с чистым телом:
+			// отмечать там было нечего.
+			const itself = day === show;
+			const edits: Edit[] = [{
+				at: blockAppendAt(blocks),
+				remove: 0,
+				insert: movedBlockLines(lines, block, itself ? own : day, date, itself),
+			}];
+
+			if (itself) {
+				// Свободного дня не нашлось - череду не двигаем, но экземпляр всё равно
+				// переносим: потерять его хуже, чем оставить цепочку на месте.
+				const next = nextFreeDate(own, repeat, taken);
+
+				if (next) {
+					edits.push(setParamEdit(block, 'date', next));
+					// ↔️ уехало вместе с экземпляром: у цепочки снова свой день.
+					const drop = removeParamEdit(block, 'move');
+					if (drop) edits.push(drop);
+					edits.push(...clearChecksEdits(lines, block));
+				}
+			}
+
+			return applyEdits(lines, edits).join('\n');
 		});
 	}
 

@@ -22,7 +22,7 @@ export const useFixedClock = (date = `${TODAY}T12:00:00`): void => {
 export interface TaskBlockFixture {
 	/** 📅 - обязательный параметр блока. */
 	date?: string;
-	/** ↔️ - перемещённая дата. */
+	/** ↔️ - день показа перенесённого экземпляра. */
 	move?: string | null;
 	/** 🔁 - текст повтора. */
 	repeat?: string | null;

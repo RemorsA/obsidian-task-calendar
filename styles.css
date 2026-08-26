@@ -2,7 +2,7 @@
 	min-width: 300px;
 
 	@media (width <= 768px) {
-		padding-bottom: 40px;
+		padding-bottom: 100px;
 	}
 
 	.task__calendar-default-button {
@@ -142,7 +142,7 @@
 	.task__calendar-create {
 		display: flex;
 		align-items: center;
-		margin-top: 15px;
+		margin-top: 10px;
 
 		.task__calendar-create-input {
 			flex: 1;
@@ -188,7 +188,7 @@
 				position: absolute;
 				top: 0;
 				right: 0;
-				z-index: 10;
+				z-index: 1;
 			}
 
 			/*
@@ -241,13 +241,14 @@
 			 * Закрытая задача - перечёркнутый список целиком. Перечёркивание своё, а
 			 * не от темы: тема рисует его только при включённой настройке чтения, и
 			 * закрытая задача осталась бы неотличимой от открытой.
+			 * РЕГУЛИРУЕТСЯ ТЕМОЙ
 			 */
-			&.--is-done {
+			/* &.--is-done {
 				.tasks__item-body {
 					text-decoration: line-through;
 					color: color-mix(in srgb, var(--color-base-100), transparent 40%);
 				}
-			}
+			} */
 
 			/*
 			 * Списки тела верстаются теми же метриками, что и сама заметка: шаг
@@ -280,7 +281,7 @@
 				 * чекбоксе 16px. Маркер у списков рисует тема, так что если линия
 				 * не попала под него - крутить надо здесь.
 				 */
-				--task__calendar-guide-shift: calc(var(--checkbox-size, 1em) / 2 + 0.4em);
+				--task__calendar-guide-shift: calc(var(--checkbox-size, 1em) / 2 + .5em);
 
 				li > ul,
 				li > ol {

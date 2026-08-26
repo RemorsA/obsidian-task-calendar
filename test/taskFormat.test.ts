@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
 	allChecked,
 	applyEdits,
-	blockBase,
+	blockDate,
 	blockShape,
+	blockShow,
 	buildTaskFile,
 	compareByDate,
 	compareByName,
@@ -12,6 +13,7 @@ import {
 	blockAppendAt,
 	nextDate,
 	nextFreeDate,
+	movedBlockLines,
 	occurrenceBlockLines,
 	occurrencesInRange,
 	parseBlocks,
@@ -176,18 +178,14 @@ describe('nextDate - тест-кейсы раздела 11', () => {
 		expect(nextDate('вчера', { interval: 1, unit: 'day' })).toBeNull();
 	});
 
-	it('база - дата показа блока: ↔️, если она есть, иначе 📅', () => {
-		const moved = blockOf(taskFileText({ date: '2026-08-22', move: '2026-08-30' }));
-		const plain = blockOf(taskFileText({ date: '2026-08-22' }));
-
-		expect(blockBase(moved.block)).toBe('2026-08-30');
-		expect(blockBase(plain.block)).toBe('2026-08-22');
+	it('база - 📅 блока', () => {
+		expect(blockDate(blockOf(taskFileText({ date: '2026-08-22' })).block)).toBe('2026-08-22');
 	});
 
-	it('мусорная ↔️ базой не становится', () => {
-		const content = ['', '- 📅 2026-08-22', '- ↔️ завтра', '\t- [ ] Дело', ''].join('\n');
+	it('мусорная 📅 базой не становится', () => {
+		const content = ['', '- 📅 завтра', '\t- [ ] Дело', ''].join('\n');
 
-		expect(blockBase(blockOf(content).block)).toBe('2026-08-22');
+		expect(blockDate(blockOf(content).block)).toBeNull();
 	});
 });
 
@@ -282,7 +280,6 @@ describe('разбор блоков', () => {
 	it('читает параметры и тело', () => {
 		const content = taskFileText({
 			date: '2026-08-21',
-			move: '2026-08-25',
 			repeat: 'Каждый день',
 			done: '2026-08-21',
 			body: ['- [ ] Купить молоко'],
@@ -294,7 +291,6 @@ describe('разбор блоков', () => {
 			key: '/Задачи/note.md#0',
 			blockIndex: 0,
 			date: '2026-08-21',
-			move: '2026-08-25',
 			repeat: 'Каждый день',
 			done: '2026-08-21',
 			fileName: 'note',
@@ -322,19 +318,41 @@ describe('разбор блоков', () => {
 		});
 	});
 
+	it('строка ↔️ из старых файлов просто игнорируется', () => {
+		const content = ['', '- 📅 2026-08-21', '- ↔️ 2026-08-25', '\t- [ ] Дело', ''].join('\n');
+		const tasks = readTasks('note.md', content);
+
+		// Флага перемещения больше нет: строка не параметр, блок от неё не ломается.
+		expect(tasks).toHaveLength(1);
+		expect(tasks[0]).toMatchObject({ date: '2026-08-21', body: '- [ ] Дело' });
+	});
+
 	it('↔️ читается и без селектора U+FE0F', () => {
 		const content = ['', '- 📅 2026-08-21', '- ↔ 2026-08-25', '\t- [ ] Дело', ''].join('\n');
 
 		expect(readTasks('note.md', content)[0].move).toBe('2026-08-25');
 	});
 
-	it('↔️ учитывается и без 🔁', () => {
+	it('↔️ читается и без 🔁 - перенесённый экземпляр повтора не ведёт', () => {
 		const content = taskFileText({ date: '2026-08-21', move: '2026-08-25' });
 
 		expect(readTasks('note.md', content)[0]).toMatchObject({
+			date: '2026-08-21',
 			move: '2026-08-25',
 			repeat: null,
 		});
+	});
+
+	it('день показа блока: ↔️, если она есть и разобралась, иначе 📅', () => {
+		const moved = blockOf(taskFileText({ date: '2026-08-21', move: '2026-08-25' }));
+		const plain = blockOf(taskFileText({ date: '2026-08-21' }));
+		const garbage = blockOf(taskFileText({ date: '2026-08-21', move: 'завтра' }));
+
+		expect(blockShow(moved.block)).toBe('2026-08-25');
+		expect(blockShow(plain.block)).toBe('2026-08-21');
+		// Мусор в ↔️ блок не ломает: показываем по 📅.
+		expect(blockShow(garbage.block)).toBe('2026-08-21');
+		expect(isValidBlock(garbage.lines, garbage.block)).toBe(true);
 	});
 
 	it('эмодзи без значения параметром не считается', () => {
@@ -618,25 +636,14 @@ describe('правки блока', () => {
 		].join('\n'));
 	});
 
-	it('↔️ встаёт сразу после 📅', () => {
+	it('существующий параметр заменяется, а не дублируется', () => {
 		const content = taskFileText({ date: '2026-08-21', repeat: 'Каждый день' });
 		const { lines, block } = blockOf(content);
-		const next = applyEdits(lines, [setParamEdit(block, 'move', '2026-08-30')]).join('\n');
+		const next = applyEdits(lines, [setParamEdit(block, 'date', '2026-08-30')]).join('\n');
 
-		expect(next.split('\n').slice(1, 4)).toEqual([
-			'- 📅 2026-08-21',
-			'- ↔️ 2026-08-30',
-			'- 🔁 Каждый день',
-		]);
-	});
-
-	it('существующий параметр заменяется, а не дублируется', () => {
-		const content = taskFileText({ date: '2026-08-21', move: '2026-08-25' });
-		const { lines, block } = blockOf(content);
-		const next = applyEdits(lines, [setParamEdit(block, 'move', '2026-08-30')]).join('\n');
-
-		expect(next).toContain('- ↔️ 2026-08-30');
-		expect(next).not.toContain('2026-08-25');
+		expect(next).toContain('- 📅 2026-08-30');
+		expect(next).not.toContain('2026-08-21');
+		expect(next.split('\n').filter((line) => line.startsWith('- 📅'))).toHaveLength(1);
 	});
 
 	it('убирает параметр, а если его нет - ничего не делает', () => {
@@ -652,7 +659,6 @@ describe('правки блока', () => {
 	it('новый блок повтора: та же 🔁, то же тело со снятыми чекбоксами', () => {
 		const content = taskFileText({
 			date: '2026-08-20',
-			move: '2026-08-25',
 			repeat: 'Каждый день',
 			done: '2026-08-21',
 			body: ['- [x] Дело', '\t- [x] Подпункт'],
@@ -681,6 +687,44 @@ describe('правки блока', () => {
 		]);
 	});
 
+	it('блок перенесённого экземпляра: 📅 - день череды, ↔️ - день показа', () => {
+		const { lines, block } = blockOf(taskFileText({
+			date: '2026-08-22',
+			repeat: 'Каждый день',
+			body: ['- [x] Дело', '\t- [ ] Подпункт'],
+		}));
+
+		// Уехал сам блок - отметки едут с ним: это тот же экземпляр.
+		expect(movedBlockLines(lines, block, '2026-08-22', '2026-08-25', true)).toEqual([
+			'- 📅 2026-08-22',
+			'- ↔️ 2026-08-25',
+			'\t- [x] Дело',
+			'\t\t- [ ] Подпункт',
+		]);
+
+		// Уехал расчётный день череды - тело чистое, отмечать там было нечего.
+		expect(movedBlockLines(lines, block, '2026-08-23', '2026-08-25')).toEqual([
+			'- 📅 2026-08-23',
+			'- ↔️ 2026-08-25',
+			'\t- [ ] Дело',
+			'\t\t- [ ] Подпункт',
+		]);
+	});
+
+	it('↔️ встаёт сразу после 📅', () => {
+		const { lines, block } = blockOf(taskFileText({
+			date: '2026-08-21',
+			repeat: 'Каждый день',
+		}));
+		const next = applyEdits(lines, [setParamEdit(block, 'move', '2026-08-30')]).join('\n');
+
+		expect(next.split('\n').slice(1, 4)).toEqual([
+			'- 📅 2026-08-21',
+			'- ↔️ 2026-08-30',
+			'- 🔁 Каждый день',
+		]);
+	});
+
 	it('выполненный блок дописывается за последним, а не в конец файла', () => {
 		const content = taskFileText(
 			{ date: '2026-08-22', repeat: 'Каждый день' },
@@ -702,6 +746,15 @@ describe('правки блока', () => {
 
 		expect(blockShape(open.block)).toBe(blockShape(done.block));
 		expect(blockShape(open.block)).toBe(blockShape(extra.block));
+	});
+
+	it('отпечаток блока не зависит от ↔️: перенос это тот же блок', () => {
+		const here = blockOf(taskFileText({ date: '2026-08-13' }));
+		const moved = blockOf(taskFileText({ date: '2026-08-13', move: '2026-08-20' }));
+		const again = blockOf(taskFileText({ date: '2026-08-13', move: '2026-08-25' }));
+
+		expect(blockShape(here.block)).toBe(blockShape(moved.block));
+		expect(blockShape(moved.block)).toBe(blockShape(again.block));
 	});
 
 	it('отпечаток блока меняется вместе с параметрами', () => {
@@ -742,11 +795,6 @@ describe('сортировка и группы', () => {
 		...over,
 	});
 
-	it('дата показа - ↔️, если она есть', () => {
-		expect(showDate(task({ date: '2026-08-13', move: '2026-08-20' }))).toBe('2026-08-20');
-		expect(showDate(task({ date: '2026-08-13' }))).toBe('2026-08-13');
-	});
-
 	it('по наименованию, числа по значению', () => {
 		const list = [task({ sortKey: 'Дело 10' }), task({ sortKey: 'Дело 2' })];
 
@@ -765,7 +813,7 @@ describe('сортировка и группы', () => {
 		expect(list.sort(compareByName).map((item) => item.sortKey)).toEqual(['Яблоко', '']);
 	});
 
-	it('при равных наименованиях сравниваются дата показа, имя файла и номер блока', () => {
+	it('при равных наименованиях сравниваются дата, имя файла и номер блока', () => {
 		const early = task({ date: '2026-08-10' });
 		const late = task({ date: '2026-08-20' });
 		const other = task({ date: '2026-08-10', fileName: 'a' });
@@ -776,17 +824,32 @@ describe('сортировка и группы', () => {
 		expect([second, other].sort(compareByName)[0]).toBe(other);
 	});
 
-	it('просроченные - сначала по дате показа, старое сверху', () => {
+	it('просроченные - сначала по дате, старое сверху', () => {
 		const old = task({ date: '2026-08-01', sortKey: 'Яблоко' });
 		const fresh = task({ date: '2026-08-10', sortKey: 'Абрикос' });
 
 		expect([fresh, old].sort(compareByDate)[0]).toBe(old);
 	});
 
-	it('просрочена: дата показа в прошлом и ✅ нет', () => {
+	it('просрочена: 📅 в прошлом и ✅ нет', () => {
 		expect(isOverdue(task({ date: '2026-08-12' }), '2026-08-13')).toBe(true);
 		expect(isOverdue(task({ date: '2026-08-13' }), '2026-08-13')).toBe(false);
+		expect(isOverdue(task({ date: '2026-08-14' }), '2026-08-13')).toBe(false);
 		expect(isOverdue(task({ date: '2026-08-12', done: '2026-08-12' }), '2026-08-13')).toBe(false);
-		expect(isOverdue(task({ date: '2026-08-01', move: '2026-08-20' }), '2026-08-13')).toBe(false);
+	});
+
+	it('просрочка считается по дню показа, а не по 📅', () => {
+		// Уехал вперёд - долгом быть перестал, уехал назад - стал.
+		expect(isOverdue(task({ date: '2026-08-12', move: '2026-08-20' }), '2026-08-13')).toBe(false);
+		expect(isOverdue(task({ date: '2026-08-20', move: '2026-08-12' }), '2026-08-13')).toBe(true);
+	});
+
+	it('по дате сортирует по дню показа', () => {
+		const list = [
+			task({ key: 'moved', date: '2026-08-10', move: '2026-08-20' }),
+			task({ key: 'plain', date: '2026-08-15' }),
+		];
+
+		expect(list.sort(compareByDate).map((item) => item.key)).toEqual(['plain', 'moved']);
 	});
 });

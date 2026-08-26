@@ -5,7 +5,6 @@ import { moment } from 'obsidian';
  *
  * ```
  * - 📅 2026-08-21
- * - ↔️ 2026-08-25
  * - 🔁 Каждый день
  * - ✅ 2026-08-21
  * 	- [ ] Купить молоко
@@ -86,9 +85,9 @@ export interface Task {
 	key: string;
 	/** Порядковый номер блока в файле, считая и невалидные. */
 	blockIndex: number;
-	/** 📅 - обязательный параметр. */
+	/** 📅 - обязательный параметр: день задачи в череде и точка отсчёта повтора. */
 	date: string;
-	/** ↔️ - перемещённая дата показа. */
+	/** ↔️ - день показа, если экземпляр перенесли. */
 	move: string | null;
 	/** 🔁 - текст повтора как он написан в файле. */
 	repeat: string | null;
@@ -294,11 +293,8 @@ export const normalizeDate = (value: unknown): string | null => {
 };
 
 /**
- * Следующая дата повтора. Шаг применяется **ровно один раз**: ни ✅, ни
- * сегодняшний день в расчёте не участвуют.
- *
- * База - **дата показа** выполненного блока, её даёт `blockBase`. Перенесли
- * задачу вперёд - и череда идёт оттуда, куда перенесли.
+ * Следующая дата повтора. База - 📅 выполненного блока, шаг применяется **ровно
+ * один раз**: ни ✅, ни сегодняшний день в расчёте не участвуют.
  *
  * Следствие: задача, закрытая с опозданием, получит следующую дату тоже в
  * прошлом и сразу попадёт в просроченные. Это ожидаемо - догонять до
@@ -481,16 +477,17 @@ export const parseBlocks = (lines: string[]): ParsedBlock[] => {
 	return blocks;
 };
 
+/** 📅 блока - его единственная дата и база расчёта повтора. */
+export const blockDate = (block: ParsedBlock): string | null =>
+	normalizeDate(block.params.date?.value);
+
 /**
- * База расчёта повтора для блока - его дата показа: ↔️, если она есть, иначе 📅.
+ * День показа блока: ↔️, если она есть и разобралась, иначе 📅.
  *
- * Считать от 📅, игнорируя перенос, значило бы вот что: перенесли задачу с 22-го
- * на 23-е, выполнили - и следующий повтор встаёт на 23-е, рядом с только что
- * выполненной карточкой. На дне переноса задача двоилась, а перенос вперёд
- * отбрасывал череду назад, в просрочку, и до перенесённого дня приходилось
- * догонять выполнением.
+ * Мусор в ↔️ блок не ломает - показываем по 📅: 📅 у валидного блока есть всегда,
+ * а молча спрятать задачу из-за кривой строки хуже, чем показать её на своём дне.
  */
-export const blockBase = (block: ParsedBlock): string | null =>
+export const blockShow = (block: ParsedBlock): string | null =>
 	normalizeDate(block.params.move?.value) ?? normalizeDate(block.params.date?.value);
 
 /** Отступ строки: табы и пробелы по отдельности. */
@@ -641,12 +638,12 @@ export const splitPath = (path: string): { filePath: string; fileName: string } 
 	};
 };
 
+/** День показа задачи: позиция в календаре, точка и просрочка считаются по нему. */
+export const showDate = (task: Task): string => task.move ?? task.date;
+
 /** Путь файла в хранилище по задаче - обратная операция к splitPath. */
 export const taskVaultPath = (task: Task): string =>
 	`${task.filePath.slice(1)}${task.fileName}.md`;
-
-/** Дата показа: позиция в календаре, точка и признак просрочки считаются по ней. */
-export const showDate = (task: Task): string => task.move ?? task.date;
 
 /**
  * Задачи файла - по одной на валидный блок.
@@ -698,9 +695,6 @@ export const readTasks = (path: string, content: string): Task[] => {
  * тело частью отпечатка, такая правка выглядела бы как «другой блок», и ✅
  * осталось бы висеть на невыполненной задаче.
  *
- * **↔️ в отпечаток тоже не входит:** отметка на расчётном дне череды пишет перенос
- * и галочку одной записью, и по изменившемуся отпечатку автоматика не увидела бы
- * закрытия. Опознавать блок хватает 📅, 🔁 и ✅.
  */
 export const blockShape = (block: ParsedBlock): string =>
 	SHAPE_PARAMS
@@ -750,7 +744,7 @@ export const paramLine = (name: ParamName, value: string): string =>
 
 /**
  * Поставить параметр: заменить существующую строку или вписать новую в
- * канонический порядок 📅, ↔️, 🔁, ✅.
+ * канонический порядок 📅, 🔁, ✅.
  */
 export const setParamEdit = (block: ParsedBlock, name: ParamName, value: string): Edit => {
 	const existing = block.params[name];
@@ -775,14 +769,19 @@ export const removeParamEdit = (block: ParsedBlock, name: ParamName): Edit | nul
 };
 
 /**
- * Тело блока со снятыми чекбоксами. Отступы нормализуются в табы, 1 таб на
- * уровень: своё пишем канонически, чужое не трогаем.
+ * Копия тела блока. Отступы нормализуются в табы, 1 таб на уровень: своё пишем
+ * канонически, чужое не трогаем.
+ *
+ * `clear` снимает галочки - новому экземпляру задачи чужие отметки не нужны.
+ * Перенос, наоборот, забирает состояние с собой: это тот же экземпляр, просто в
+ * другой день.
  */
-const clearedBody = (lines: string[], block: ParsedBlock): string[] => {
+const copiedBody = (lines: string[], block: ParsedBlock, clear: boolean): string[] => {
 	const levels = bodyLevels(lines, block);
 
 	return block.body.map((i) => {
-		const text = lines[i].trimStart().replace(CHECKBOX_LINE, '$1 $3');
+		const raw = lines[i].trimStart();
+		const text = clear ? raw.replace(CHECKBOX_LINE, '$1 $3') : raw;
 
 		return '\t'.repeat((levels.get(i) ?? 0) + 1) + text;
 	});
@@ -790,7 +789,7 @@ const clearedBody = (lines: string[], block: ParsedBlock): string[] => {
 
 /**
  * Новый блок цепочки повтора: 📅 по расчёту, та же строка 🔁, то же тело со
- * снятыми чекбоксами. Без ✅ и без ↔️ - выполнение и перенос к нему не относятся.
+ * снятыми чекбоксами. Без ✅ - выполнение предыдущего к нему не относится.
  */
 export const repeatBlockLines = (
 	lines: string[],
@@ -801,7 +800,7 @@ export const repeatBlockLines = (
 	const repeat = block.params.repeat;
 	if (repeat) params.push(paramLine('repeat', repeat.value));
 
-	return [...params, ...clearedBody(lines, block)];
+	return [...params, ...copiedBody(lines, block, true)];
 };
 
 /**
@@ -814,8 +813,35 @@ export const repeatBlockLines = (
 export const occurrenceBlockLines = (
 	lines: string[],
 	block: ParsedBlock,
-	date: string
-): string[] => [paramLine('date', date), ...clearedBody(lines, block)];
+	date: string,
+	keepMarks = false
+): string[] => [paramLine('date', date), ...copiedBody(lines, block, !keepMarks)];
+
+/**
+ * Блок перенесённого экземпляра: 📅 - день череды, с которого он уехал, ↔️ - день
+ * показа. **Без 🔁:** цепочку ведёт свой блок, второй с повтором наплодил бы свою
+ * череду.
+ *
+ * 📅 остаётся днём череды намеренно: этот день теперь занят блоком, и череда его
+ * перескочит - иначе на нём снова появилась бы карточка, уже вторая.
+ */
+export const movedBlockLines = (
+	lines: string[],
+	block: ParsedBlock,
+	origin: string,
+	date: string,
+	keepMarks = false
+): string[] => [
+	paramLine('date', origin),
+	paramLine('move', date),
+	...copiedBody(lines, block, !keepMarks),
+];
+
+/** Снять галочки в теле блока - правками, не переписывая его целиком. */
+export const clearChecksEdits = (lines: string[], block: ParsedBlock): Edit[] =>
+	block.body
+		.filter((i) => isChecked(lines[i]))
+		.map((i) => ({ at: i, remove: 1, insert: [lines[i].replace(CHECKBOX_LINE, '$1 $3')] }));
 
 /**
  * Место для **выполненного** блока - в конец, за последним.
@@ -923,9 +949,9 @@ const collator = new Intl.Collator('ru', {
 	ignorePunctuation: true,
 });
 
-/** Ключи второго уровня при равенстве: дата показа, имя файла, номер блока. */
+/** Ключи второго уровня при равенстве: дата, имя файла, номер блока. */
 const compareTail = (a: Task, b: Task): number => {
-	const byDate = showDate(a).localeCompare(showDate(b));
+	const byDate = a.date.localeCompare(b.date);
 	if (byDate !== 0) return byDate;
 
 	const byFile = collator.compare(a.fileName, b.fileName);
@@ -946,13 +972,13 @@ export const compareByName = (a: Task, b: Task): number => {
 	return compareTail(a, b);
 };
 
-/** По дате показа, старое сверху. Так идут просроченные. */
+/** По дате, старое сверху. Так идут просроченные. */
 export const compareByDate = (a: Task, b: Task): number => {
 	const byDate = showDate(a).localeCompare(showDate(b));
 
 	return byDate !== 0 ? byDate : compareByName(a, b);
 };
 
-/** Задача просрочена: дата показа в прошлом и ✅ нет. */
+/** Задача просрочена: её дата в прошлом и ✅ нет. */
 export const isOverdue = (task: Task, today: string): boolean =>
 	task.done === null && showDate(task) < today;
