@@ -102,46 +102,6 @@ describe('настройки', () => {
 	});
 });
 
-describe('подписка на настройки', () => {
-	it('saveSettings уведомляет подписчиков', async () => {
-		const { plugin } = createPlugin(null);
-		await plugin.loadSettings();
-		const calls: string[] = [];
-		plugin.onSettingsChange(() => calls.push(plugin.settings.tasksFolderPath));
-
-		plugin.settings.tasksFolderPath = 'Задачи';
-		await plugin.saveSettings();
-
-		expect(calls).toEqual(['Задачи']);
-	});
-
-	it('отписка перестаёт получать уведомления', async () => {
-		const { plugin } = createPlugin(null);
-		await plugin.loadSettings();
-		let calls = 0;
-		const unsubscribe = plugin.onSettingsChange(() => { calls++; });
-
-		await plugin.saveSettings();
-		unsubscribe();
-		await plugin.saveSettings();
-
-		expect(calls).toBe(1);
-	});
-
-	it('несколько открытых календарей получают уведомление каждый', async () => {
-		const { plugin } = createPlugin(null);
-		await plugin.loadSettings();
-		let first = 0;
-		let second = 0;
-		plugin.onSettingsChange(() => { first++; });
-		plugin.onSettingsChange(() => { second++; });
-
-		await plugin.saveSettings();
-
-		expect([first, second]).toEqual([1, 1]);
-	});
-});
-
 describe('onload', () => {
 	it('регистрирует view, команду, иконку и вкладку настроек', async () => {
 		const { plugin, mock } = createPlugin(null);
@@ -306,14 +266,15 @@ describe('карта задач', () => {
 		expect(plugin.taskMap.all()).toHaveLength(0);
 	});
 
-	it('onLayoutReady поднимает карту и подписки', async () => {
+	it('onLayoutReady поднимает карту по всему хранилищу и подписки', async () => {
 		const { app, plugin } = createPlugin({ tasksFolderPath: '/Задачи' }, withTasks());
 		await plugin.onload();
 
 		app.workspace.triggerLayoutReady();
 		await flushPromises();
 
-		expect(plugin.taskMap.all().map((task) => task.key)).toEqual(['/Задачи/дело.md#0']);
+		expect(plugin.taskMap.all().map((task) => task.key).sort())
+			.toEqual(['/Другое/чужое.md#0', '/Задачи/дело.md#0']);
 		expect(app.vault.handlerCount('modify')).toBe(1);
 		expect(app.vault.handlerCount('create')).toBe(1);
 		expect(app.vault.handlerCount('delete')).toBe(1);
@@ -343,17 +304,19 @@ describe('карта задач', () => {
 		expect(app.vault.handlerCount('rename')).toBe(0);
 	});
 
-	it('смена папки в настройках пересобирает карту', async () => {
+	it('смена папки в настройках карту не пересобирает', async () => {
 		const { app, plugin } = createPlugin({ tasksFolderPath: '/Задачи' }, withTasks());
 		await plugin.onload();
 		app.workspace.triggerLayoutReady();
 		await flushPromises();
+		const reads = app.vault.calls.cachedRead;
 
 		plugin.settings.tasksFolderPath = '/Другое';
 		await plugin.saveSettings();
 		await vi.advanceTimersByTimeAsync(300);
 
-		expect(plugin.taskMap.all().map((task) => task.key)).toEqual(['/Другое/чужое.md#0']);
+		expect(app.vault.calls.cachedRead).toBe(reads);
+		expect(plugin.taskMap.all()).toHaveLength(2);
 	});
 });
 
@@ -367,11 +330,12 @@ describe('вкладка настроек', () => {
 		return { plugin, tab };
 	};
 
-	it('показывает текущий путь к папке задач', async () => {
+	it('показывает текущую папку для новых задач', async () => {
 		const { tab } = await openTab();
 
 		expect(Setting.instances).toHaveLength(1);
-		expect(Setting.instances[0].name).toBe('Путь к папке с задачами');
+		expect(Setting.instances[0].name).toBe('Папка для новых задач');
+		expect(Setting.instances[0].desc).toContain('по всему хранилищу');
 		expect(Setting.instances[0].textComponents[0].getValue()).toBe('/');
 		expect(tab.containerEl.children).toHaveLength(0);
 	});

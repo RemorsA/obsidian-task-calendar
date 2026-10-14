@@ -1,4 +1,4 @@
-import { Plugin, WorkspaceLeaf, debounce } from 'obsidian';
+import { Plugin, WorkspaceLeaf } from 'obsidian';
 import { TaskCalendarSettingTab } from './settings';
 import { TaskMap } from './taskMap';
 import { DEFAULT_SETTINGS, TaskCalendarSettings, VIEW_TYPE_TASK_CALENDAR } from './types';
@@ -15,31 +15,12 @@ export default class TaskCalendarPlugin extends Plugin {
 	// @ts-ignore
 	taskMap: TaskMap;
 
-	/** Слушатели изменения настроек: открытые календари перечитывают задачи. */
-	private settingsListeners = new Set<() => void>();
-
-	/**
-	 * Подписаться на изменение настроек. Возвращает функцию отписки - вызывать
-	 * при закрытии календаря, иначе размонтированный компонент останется в
-	 * подписчиках.
-	 */
-	onSettingsChange(listener: () => void): () => void {
-		this.settingsListeners.add(listener);
-
-		return () => {
-			this.settingsListeners.delete(listener);
-		};
-	}
-
 	async onload() {
 		await this.loadSettings();
 
+		// Карта сканирует всё хранилище, а папка из настроек нужна только при
+		// создании задачи - поэтому смена настроек карту не пересобирает.
 		this.taskMap = new TaskMap(this);
-
-		// Сменили папку в настройках - пересобираем карту. Вкладка настроек пишет
-		// на каждый символ, поэтому пересбор откладывается.
-		const rescan = debounce(() => { void this.taskMap.refresh(); }, 300, true);
-		this.onSettingsChange(rescan);
 
 		// Индексация после того, как Obsidian достроил интерфейс: до этого список
 		// файлов хранилища ещё неполный.
@@ -118,7 +99,5 @@ export default class TaskCalendarPlugin extends Plugin {
 
 	async saveSettings() {
 		await this.saveData(this.settings);
-
-		for (const listener of this.settingsListeners) listener();
 	}
 }

@@ -14,7 +14,8 @@ export class TaskCalendarSettingTab extends PluginSettingTab {
 		containerEl.empty();
 
 		new Setting(containerEl)
-			.setName('Путь к папке с задачами')
+			.setName('Папка для новых задач')
+			.setDesc('Сюда кладутся задачи, созданные из календаря. Задачи ищутся по всему хранилищу.')
 			.addText(text => text
 				.setPlaceholder('')
 				.setValue(this.plugin.settings.tasksFolderPath)

@@ -179,6 +179,8 @@
 import { onMounted, onUnmounted, ref, shallowRef, computed } from 'vue';
 import type TaskCalendarPlugin from '../TaskCalendarPlugin';
 import { Notice, moment } from 'obsidian';
+import type { OpenViewState } from 'obsidian';
+import type { BlockRange } from '../taskMap';
 import TaskBody from './TaskBody.vue';
 import {
 	compareByDate,
@@ -426,14 +428,36 @@ const handleClickDayNumber = (day: CalendarDay): void => {
 	selectedDate.value = day.date;
 };
 
-/** Открыть заметку по пути. В режиме правки - вторым аргументом. */
-const openNote = async (path: string, edit = false): Promise<void> => {
+/**
+ * Открыть заметку по пути. В режиме правки - вторым аргументом.
+ *
+ * `range` - строки блока задачи. Obsidian подсветит их той же вспышкой, что и
+ * цель ссылки `[[Заметка#Заголовок]]`, прокрутит к ним и поставит курсор в
+ * начало блока: `startLoc`/`endLoc` читает режим правки, `line` - режим чтения.
+ * Выделения нет - случайное нажатие клавиши блок не сотрёт.
+ */
+const openNote = async (
+	path: string,
+	edit = false,
+	range: BlockRange | null = null
+): Promise<void> => {
+	const viewState: OpenViewState = {};
+
+	if (edit) viewState.state = { mode: 'source' };
+	if (range) {
+		viewState.eState = {
+			line: range.start.line,
+			startLoc: range.start,
+			endLoc: range.end,
+		};
+	}
+
 	try {
 		await props.plugin.app.workspace.openLinkText(
 			path,
 			'',
 			false,
-			edit ? { state: { mode: 'source' } } : undefined
+			edit || range ? viewState : undefined
 		);
 	} catch (error) {
 		console.error(`${path}:`, error);
@@ -461,8 +485,15 @@ const handleCreateTask = async (open: boolean): Promise<void> => {
 	if (open) await openNote(path, true);
 };
 
+/**
+ * Перейти в файл задачи и подсветить её блок. Строки ищутся в момент клика: в
+ * файле может быть целая цепочка блоков, и открыть его просто сверху значило бы
+ * искать нужный глазами.
+ */
 const handleClickTaskLink = async (task: Task): Promise<void> => {
-	await openNote(taskVaultPath(task), true);
+	const range = await taskMap.locate(task.key);
+
+	await openNote(taskVaultPath(task), true, range);
 };
 
 /**
