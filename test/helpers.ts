@@ -64,7 +64,7 @@ export interface PluginDoubleOptions {
 	files?: Record<string, string>;
 	/** Папки, существующие без файлов внутри. */
 	folders?: string[];
-	/** Значение настройки плагина. */
+	/** Папка для новых задач - значение настройки плагина. */
 	tasksFolderPath?: string;
 }
 
@@ -73,10 +73,6 @@ export interface PluginDouble {
 	app: App;
 	vault: Vault;
 	taskMap: TaskMap;
-	/** Сменить настройку и уведомить подписчиков - как делает вкладка настроек. */
-	changeTasksFolderPath: (path: string) => void;
-	/** Сколько подписчиков на настройки живо - для проверки отписки. */
-	settingsListenerCount: () => number;
 }
 
 /** Плагин-двойник: карте задач нужны app и settings, компоненту - ещё и карта. */
@@ -86,34 +82,19 @@ export const createPluginDouble = ({
 	tasksFolderPath = '/',
 }: PluginDoubleOptions = {}): PluginDouble => {
 	const app = new App(new Vault(files, folders));
-	const listeners = new Set<() => void>();
 
 	const plugin = {
 		app,
 		settings: { tasksFolderPath },
-		onSettingsChange(listener: () => void) {
-			listeners.add(listener);
-
-			return () => {
-				listeners.delete(listener);
-			};
-		},
 	} as unknown as TaskCalendarPlugin;
 
 	const taskMap = new TaskMap(plugin);
 	plugin.taskMap = taskMap;
-
-	const changeTasksFolderPath = (path: string): void => {
-		plugin.settings.tasksFolderPath = path;
-		for (const listener of listeners) listener();
-	};
 
 	return {
 		plugin,
 		app,
 		vault: app.vault,
 		taskMap,
-		changeTasksFolderPath,
-		settingsListenerCount: () => listeners.size,
 	};
 };

@@ -479,17 +479,67 @@ describe('череда повтора в календаре', () => {
 });
 
 describe('кнопки карточки', () => {
-	it('кнопка перехода открывает заметку на правку', async () => {
+	it('кнопка перехода открывает заметку на правку и подсвечивает блок', async () => {
 		const { wrapper, app } = await mountCalendar({
 			files: { 'Задачи/note.md': taskFileText({ date: TODAY }) },
-			tasksFolderPath: '/Задачи',
 		});
 
 		await wrapper.find('.tasks__item-link-button').trigger('click');
 		await flushPromises();
 
+		// Строка 0 - пустая, блок - 📅 на 1-й и тело на 2-й.
 		expect(app.workspace.openLinkCalls).toEqual([{
 			linktext: 'Задачи/note.md',
+			sourcePath: '',
+			newLeaf: false,
+			openViewState: {
+				state: { mode: 'source' },
+				eState: {
+					line: 1,
+					startLoc: { line: 1, col: 0 },
+					endLoc: { line: 2, col: '\t- [ ] Задача'.length },
+				},
+			},
+		}]);
+	});
+
+	it('подсвечивается блок своей карточки, а не первый в файле', async () => {
+		const { wrapper, app } = await mountCalendar({
+			files: {
+				'note.md': taskFileText(
+					{ date: '2026-08-20', body: ['- [ ] Потом'] },
+					{ date: TODAY, body: ['- [ ] Сегодня', '\t- [ ] Подпункт'] },
+				),
+			},
+		});
+
+		// Карточка одна - сегодняшняя, второй блок файла.
+		expect(wrapper.findAll('.tasks__item')).toHaveLength(1);
+
+		await wrapper.find('.tasks__item-link-button').trigger('click');
+		await flushPromises();
+
+		expect(app.workspace.openLinkCalls[0].openViewState).toMatchObject({
+			eState: {
+				line: 3,
+				startLoc: { line: 3, col: 0 },
+				endLoc: { line: 5, col: '\t\t- [ ] Подпункт'.length },
+			},
+		});
+	});
+
+	it('файл не прочитался - заметка всё равно открывается, без подсветки', async () => {
+		const { wrapper, app, vault } = await mountCalendar({
+			files: { 'note.md': taskFileText({ date: TODAY }) },
+		});
+		vi.spyOn(console, 'error').mockImplementation(() => {});
+		vault.failures.read = new Set(['note.md']);
+
+		await wrapper.find('.tasks__item-link-button').trigger('click');
+		await flushPromises();
+
+		expect(app.workspace.openLinkCalls).toEqual([{
+			linktext: 'note.md',
 			sourcePath: '',
 			newLeaf: false,
 			openViewState: { state: { mode: 'source' } },

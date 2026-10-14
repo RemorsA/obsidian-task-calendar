@@ -54,6 +54,16 @@ interface BlockState {
 }
 
 /**
+ * Где блок задачи стоит в файле: строка с нуля и позиция в ней. Форма та же, что
+ * у `startLoc`/`endLoc`, по которым Obsidian подсвечивает цель ссылки
+ * `[[Заметка#Заголовок]]`.
+ */
+export interface BlockRange {
+	start: { line: number; col: number };
+	end: { line: number; col: number };
+}
+
+/**
  * Дни, у которых в файле уже есть свой блок. Череда их перескакивает: такой день
  * держит свой блок, и второй на нём дал бы вторую карточку.
  *
@@ -133,6 +143,40 @@ export class TaskMap {
 		return this.all().find((task) => task.key === key) ?? null;
 	}
 
+	/**
+	 * Где блок задачи стоит в файле сейчас: от первой строки параметров до
+	 * последней строки тела. Нужно для подсветки при переходе в файл.
+	 *
+	 * Файл читается заново: номеров строк в карте нет, тело там уже без отступов.
+	 * Нет файла или блока - null, и переход откроет файл без подсветки.
+	 */
+	async locate(key: string): Promise<BlockRange | null> {
+		const task = this.byKey(key);
+		if (!task) return null;
+
+		const file = this.fileOf(taskVaultPath(task));
+		if (!file) return null;
+
+		let content: string;
+
+		try {
+			content = await this.plugin.app.vault.cachedRead(file);
+		} catch (error) {
+			console.error(`${file.path}:`, error);
+
+			return null;
+		}
+
+		const lines = content.split('\n');
+		const block = parseBlocks(lines).find((item) => item.index === task.blockIndex);
+		if (!block) return null;
+
+		return {
+			start: { line: block.start, col: 0 },
+			end: { line: block.end, col: lines[block.end].length },
+		};
+	}
+
 	/** Подписки на хранилище и первичная индексация. */
 	async start(): Promise<void> {
 		if (this.started) return;
@@ -161,7 +205,10 @@ export class TaskMap {
 		vault.off('rename', this.handleRename);
 	}
 
-	/** Полный пересбор: старт плагина и смена папки в настройках. */
+	/**
+	 * Полный пересбор при старте плагина. Сканируется всё хранилище: задачей файл
+	 * делает валидный блок внутри, а не папка, в которой он лежит.
+	 */
 	async refresh(): Promise<void> {
 		this.tasksByPath.clear();
 		this.states.clear();
@@ -170,8 +217,7 @@ export class TaskMap {
 		this.touched.clear();
 		this.dropped.clear();
 
-		const files = this.plugin.app.vault.getMarkdownFiles()
-			.filter((file) => this.inFolder(file.path));
+		const files = this.plugin.app.vault.getMarkdownFiles();
 
 		// Группами, а не по одной и не все разом: последовательное чтение тысячи
 		// заметок растягивается, а одновременное упирается в диск.
@@ -182,20 +228,17 @@ export class TaskMap {
 		this.notify();
 	}
 
-	/** Папка задач без слэшей по краям. Пусто - всё хранилище. */
+	/**
+	 * Папка для новых задач без слэшей по краям. Пусто - корень хранилища.
+	 * На скан не влияет: читается только в момент создания задачи.
+	 */
 	private folder(): string {
 		return this.plugin.settings.tasksFolderPath.replace(/^\/+|\/+$/g, '');
 	}
 
-	/**
-	 * Файл лежит в папке задач. Сравнение по границе пути, а не подстрокой: иначе
-	 * папка «Задачи» цепляла бы и «Старые Задачи», и файл «Задачи.md».
-	 * Сканирование рекурсивное - вложенные папки тоже.
-	 */
-	private inFolder(path: string): boolean {
-		const folder = this.folder();
-
-		return path.endsWith('.md') && (folder === '' || path.startsWith(`${folder}/`));
+	/** Заметка Markdown - кандидат в файлы задач, где бы она ни лежала. */
+	private isNote(path: string): boolean {
+		return path.endsWith('.md');
 	}
 
 	private notify(): void {
@@ -204,11 +247,11 @@ export class TaskMap {
 	}
 
 	/**
-	 * Событие стоит разбора. У файла путь проверяется строго, у папки - нет: что
-	 * в ней лежит, видно только после обхода.
+	 * Событие стоит разбора. У файла смотрим расширение, у папки - нет: что в ней
+	 * лежит, видно только после обхода.
 	 */
 	private matters(file: TAbstractFile): boolean {
-		return file instanceof TFolder || this.inFolder(file.path);
+		return file instanceof TFolder || this.isNote(file.path);
 	}
 
 	private handleUpsert = (file: TAbstractFile): void => {
@@ -227,8 +270,9 @@ export class TaskMap {
 
 	/**
 	 * Перемещение в Obsidian - это тоже rename, и обработчику приходит **старый
-	 * путь**: без него унесённая из папки задача осталась бы висеть в календаре.
-	 * Переехать может и папка целиком - тогда разбирать придётся всё, что внутри.
+	 * путь**: без него переехавшая задача висела бы в календаре дважды - по старому
+	 * пути и по новому. Переехать может и папка целиком - тогда разбирать придётся
+	 * всё, что внутри.
 	 */
 	private handleRename = (file: TAbstractFile, oldPath?: string): void => {
 		if (oldPath === undefined && !this.matters(file)) return;
@@ -257,12 +301,12 @@ export class TaskMap {
 		for (const path of touched) {
 			const file = this.plugin.app.vault.getAbstractFileByPath(path);
 
-			if (file instanceof TFile && this.inFolder(path)) {
+			if (file instanceof TFile && this.isNote(path)) {
 				if (await this.indexFile(file)) changed = true;
 				continue;
 			}
 
-			// Папку могли принести в папку задач целиком - разбираем, что внутри.
+			// Папка переехала целиком - разбираем, что внутри.
 			if (file instanceof TFolder) {
 				if (await this.indexFolder(path)) changed = true;
 				continue;
@@ -278,7 +322,7 @@ export class TaskMap {
 	/** Разобрать заметки внутри папки: она могла переехать целиком. */
 	private async indexFolder(path: string): Promise<boolean> {
 		const files = this.plugin.app.vault.getMarkdownFiles()
-			.filter((file) => file.path.startsWith(`${path}/`) && this.inFolder(file.path));
+			.filter((file) => file.path.startsWith(`${path}/`));
 
 		let changed = false;
 
@@ -652,8 +696,8 @@ export class TaskMap {
 	}
 
 	/**
-	 * Создать задачу на дату: новый файл в папке задач, 📅 и один снятый чекбокс с
-	 * текстом из поля. Возвращает путь созданного файла или null.
+	 * Создать задачу на дату: новый файл в папке для новых задач, 📅 и один снятый
+	 * чекбокс с текстом из поля. Возвращает путь созданного файла или null.
 	 *
 	 * Имя файла складывается один раз при создании и дальше не меняется:
 	 * переименование ломало бы ссылки `[[...]]` на заметку, а дата и текст в карте
@@ -702,7 +746,7 @@ export class TaskMap {
 		return path;
 	}
 
-	/** Папки задач может не быть - создаём при первой записи, вместе с родителями. */
+	/** Папки для новых задач может не быть - создаём при первой записи, с родителями. */
 	private async ensureFolder(folder: string): Promise<void> {
 		if (!folder) return;
 

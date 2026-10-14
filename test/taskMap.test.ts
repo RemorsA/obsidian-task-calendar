@@ -39,10 +39,11 @@ describe('карта задач', () => {
 	});
 
 	describe('индексация', () => {
-		it('собирает задачи из файлов папки, включая вложенные', async () => {
+		it('собирает задачи со всего хранилища, папка из настроек скан не ограничивает', async () => {
 			await setup({
 				tasksFolderPath: '/Задачи',
 				files: {
+					'корень.md': taskFileText({ date: '2026-08-12' }),
 					'Задачи/раз.md': taskFileText({ date: '2026-08-13' }),
 					'Задачи/вложенная/два.md': taskFileText({ date: '2026-08-14' }),
 					'Другое/три.md': taskFileText({ date: '2026-08-15' }),
@@ -50,31 +51,20 @@ describe('карта задач', () => {
 			});
 
 			expect(map.all().map((task) => task.key).sort()).toEqual([
+				'/Другое/три.md#0',
 				'/Задачи/вложенная/два.md#0',
 				'/Задачи/раз.md#0',
+				'/корень.md#0',
 			]);
 		});
 
-		it('пустая настройка - всё хранилище', async () => {
+		it('не заметки Markdown не читаются', async () => {
 			await setup({
-				tasksFolderPath: '/',
-				files: { 'note.md': taskFileText(), 'папка/другая.md': taskFileText() },
+				files: { 'note.md': taskFileText(), 'note.txt': taskFileText() },
 			});
 
-			expect(map.all()).toHaveLength(2);
-		});
-
-		it('папка сравнивается по границе пути', async () => {
-			await setup({
-				tasksFolderPath: '/Задачи',
-				files: {
-					'Задачи/своя.md': taskFileText(),
-					'Старые Задачи/чужая.md': taskFileText(),
-					'Задачи.md': taskFileText(),
-				},
-			});
-
-			expect(map.all().map((task) => task.key)).toEqual(['/Задачи/своя.md#0']);
+			expect(map.all().map((task) => task.key)).toEqual(['/note.md#0']);
+			expect(double.vault.calls.cachedRead).toBe(1);
 		});
 
 		it('в файле несколько блоков - несколько задач', async () => {
@@ -867,6 +857,23 @@ describe('карта задач', () => {
 			expect(map.all()).toHaveLength(1);
 		});
 
+		it('папка для новых задач читается в момент создания, без пересбора карты', async () => {
+			await setup({
+				tasksFolderPath: '/Задачи',
+				files: { 'note.md': taskFileText() },
+				folders: ['Задачи', 'Другое'],
+			});
+
+			double.plugin.settings.tasksFolderPath = '/Другое';
+			const path = await map.createTask('2026-08-20', 'Дело');
+
+			expect(path).toBe('Другое/2026-08-20 - Дело.md');
+			expect(map.all().map((task) => task.key).sort()).toEqual([
+				'/note.md#0',
+				'/Другое/2026-08-20 - Дело.md#0',
+			]);
+		});
+
 		it('пустой текст задачу не создаёт', async () => {
 			await setup({ files: {}, tasksFolderPath: '/' });
 
@@ -894,7 +901,7 @@ describe('карта задач', () => {
 			expect(map.all()).toHaveLength(0);
 		});
 
-		it('унесённая из папки задача уходит из карты по старому пути', async () => {
+		it('переехавшая задача остаётся в карте одна, по новому пути', async () => {
 			await setup({
 				tasksFolderPath: '/Задачи',
 				files: { 'Задачи/note.md': taskFileText() },
@@ -904,12 +911,20 @@ describe('карта задач', () => {
 			await double.vault.rename(fileOf('Задачи/note.md'), 'Другое/note.md');
 			await settle();
 
+			expect(map.all().map((task) => task.key)).toEqual(['/Другое/note.md#0']);
+		});
+
+		it('файл, переименованный не в .md, уходит из карты', async () => {
+			await setup({ files: { 'note.md': taskFileText() } });
+
+			await double.vault.rename(fileOf('note.md'), 'note.txt');
+			await settle();
+
 			expect(map.all()).toHaveLength(0);
 		});
 
 		it('удалённая папка уносит с собой все свои задачи', async () => {
 			await setup({
-				tasksFolderPath: '/Задачи',
 				files: {
 					'Задачи/вложенная/раз.md': taskFileText(),
 					'Задачи/вложенная/два.md': taskFileText(),
@@ -924,15 +939,15 @@ describe('карта задач', () => {
 			expect(map.all().map((task) => task.key)).toEqual(['/Задачи/своя.md#0']);
 		});
 
-		it('папка, принесённая в папку задач, разбирается целиком', async () => {
+		it('переехавшая папка переезжает в карте целиком', async () => {
 			await setup({
-				tasksFolderPath: '/Задачи',
 				folders: ['Задачи', 'Черновики'],
 				files: { 'Черновики/раз.md': taskFileText(), 'Черновики/два.md': taskFileText() },
 			});
 
-			expect(map.all()).toHaveLength(0);
+			expect(map.all()).toHaveLength(2);
 
+			// Obsidian шлёт одно событие на папку, а не на каждый файл внутри.
 			await double.vault.renameFolder('Черновики', 'Задачи/Черновики');
 			await settle();
 
@@ -952,21 +967,76 @@ describe('карта задач', () => {
 			expect(map.all()).toHaveLength(0);
 		});
 
-		it('смена папки в настройках пересобирает карту', async () => {
+	});
+
+	describe('строки блока для подсветки', () => {
+		it('блок в середине файла - от первого параметра до последней строки тела', async () => {
 			await setup({
-				tasksFolderPath: '/Задачи',
 				files: {
-					'Задачи/своя.md': taskFileText(),
-					'Другое/чужая.md': taskFileText(),
+					'note.md': taskFileText(
+						{ date: '2026-08-14', repeat: 'Каждый день' },
+						{
+							date: '2026-08-13',
+							done: '2026-08-13',
+							body: ['- [x] Задача', '\t- [x] Подзадача'],
+						},
+						{ date: '2026-08-12', done: '2026-08-12', body: ['- [x] Задача'] },
+					),
 				},
 			});
 
-			expect(map.all()).toHaveLength(1);
+			// Строка 0 - пустая, первый блок занимает 1-3, второй начинается с 4-й.
+			expect(await map.locate('/note.md#1')).toEqual({
+				start: { line: 4, col: 0 },
+				end: { line: 7, col: '\t\t- [x] Подзадача'.length },
+			});
+		});
 
-			double.plugin.settings.tasksFolderPath = '/Другое';
-			await map.refresh();
+		it('номер блока считает и невалидные блоки', async () => {
+			await setup({
+				files: {
+					'note.md': [
+						'',
+						'- 📅 2026-08-13',
+						'\tпросто текст, чекбоксов нет',
+						'- 📅 2026-08-14',
+						'\t- [ ] Задача',
+						'',
+					].join('\n'),
+				},
+			});
 
-			expect(map.all().map((task) => task.key)).toEqual(['/Другое/чужая.md#0']);
+			const [task] = map.all();
+
+			expect(task.key).toBe('/note.md#1');
+			expect(await map.locate(task.key)).toEqual({
+				start: { line: 3, col: 0 },
+				end: { line: 4, col: '\t- [ ] Задача'.length },
+			});
+		});
+
+		it('неизвестная задача - null', async () => {
+			await setup({ files: { 'note.md': taskFileText() } });
+
+			expect(await map.locate('/нет.md#0')).toBeNull();
+		});
+
+		it('файл не прочитался - null, без исключения', async () => {
+			await setup({ files: { 'note.md': taskFileText() } });
+			double.vault.failures.read = new Set(['note.md']);
+			const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+			expect(await map.locate('/note.md#0')).toBeNull();
+			expect(consoleError).toHaveBeenCalled();
+		});
+
+		it('поиск строк файл не правит', async () => {
+			await setup({ files: { 'note.md': taskFileText() } });
+
+			await map.locate('/note.md#0');
+
+			expect(double.vault.calls.process).toBe(0);
+			expect(double.vault.calls.modify).toBe(0);
 		});
 	});
 
