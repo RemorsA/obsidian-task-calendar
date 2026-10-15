@@ -239,26 +239,48 @@ describe('список задач', () => {
 		expect(itemKinds(wrapper)).toEqual(['просроченная']);
 	});
 
-	it('просроченные идут от старого долга к свежему', async () => {
+	it('просроченные - новое сверху, дата долга не влияет', async () => {
 		const { wrapper } = await mountCalendar({
 			files: {
-				'свежий.md': taskFileText({ date: '2026-08-12', body: ['- [ ] Свежий'] }),
-				'старый.md': taskFileText({ date: '2026-08-01', body: ['- [ ] Старый'] }),
+				'2026-08.md': taskFileText(
+					{ date: '2026-08-12', body: ['- [ ] Заведена раньше'] },
+					{ date: '2026-08-01', body: ['- [ ] Заведена позже'] },
+				),
 			},
 		});
 
-		expect(itemTexts(wrapper)).toEqual(['Старый', 'Свежий']);
+		expect(itemKinds(wrapper)).toEqual(['просроченная', 'просроченная']);
+		expect(itemTexts(wrapper)).toEqual(['Заведена позже', 'Заведена раньше']);
 	});
 
-	it('задачи дня идут по наименованию', async () => {
+	it('задачи дня - новое сверху: ниже в файле и в более позднем месяце', async () => {
 		const { wrapper } = await mountCalendar({
 			files: {
-				'я.md': taskFileText({ date: TODAY, body: ['- [ ] Яблоко'] }),
-				'а.md': taskFileText({ date: TODAY, body: ['- [ ] 📞 Абрикос'] }),
+				'2026-08.md': taskFileText(
+					{ date: TODAY, body: ['- [ ] Абрикос'] },
+					{ date: TODAY, body: ['- [ ] Яблоко'] },
+				),
+				// Блок перенесли сюда из июльской задачи - она заведена раньше.
+				'2026-07.md': taskFileText({ date: '2026-07-30', move: TODAY, body: ['- [ ] Груша'] }),
 			},
 		});
 
-		expect(itemTexts(wrapper)).toEqual(['📞 Абрикос', 'Яблоко']);
+		expect(itemTexts(wrapper)).toEqual(['Яблоко', 'Абрикос', 'Груша']);
+	});
+
+	it('выполненные - внизу и по наименованию', async () => {
+		const { wrapper } = await mountCalendar({
+			files: {
+				'2026-08.md': taskFileText(
+					{ date: TODAY, done: TODAY, body: ['- [x] Абрикос'] },
+					{ date: TODAY, body: ['- [ ] Дело'] },
+					{ date: TODAY, done: TODAY, body: ['- [x] Яблоко'] },
+				),
+			},
+		});
+
+		expect(itemKinds(wrapper)).toEqual(['дня', 'выполненная', 'выполненная']);
+		expect(itemTexts(wrapper)).toEqual(['Дело', 'Абрикос', 'Яблоко']);
 	});
 
 	it('выполненная показывается целиком, с отмеченными чекбоксами', async () => {
@@ -330,6 +352,21 @@ describe('череда повтора в календаре', () => {
 		for (const day of ['2026-08-22', '2026-08-23', '2026-08-29', '2026-08-30', '2026-09-05']) {
 			expect(hasDot(wrapper, day), day).toBe(true);
 		}
+	});
+
+	it('чужая задача в том же файле череду не прерывает', async () => {
+		const { wrapper } = await mountCalendar({
+			files: {
+				'2026-08.md': taskFileText(
+					{ date: '2026-08-22', repeat: 'Каждый день', body: ['- [ ] Полить фикус'] },
+					{ date: '2026-08-24', body: ['- [ ] Позвонить'] },
+				),
+			},
+		});
+
+		await clickDay(wrapper, '2026-08-24');
+
+		expect(itemTexts(wrapper).sort()).toEqual(['Позвонить', 'Полить фикус']);
 	});
 
 	it('до 📅 точек нет: задачи тогда ещё не было', async () => {
@@ -752,15 +789,16 @@ describe('создание задачи', () => {
 		await wrapper.find('.task__calendar-create-input').setValue(text);
 	};
 
-	it('кнопки выключены, пока поле пустое', async () => {
+	it('кнопка одна и выключена, пока поле пустое', async () => {
 		const { wrapper } = await mountCalendar();
 		const buttons = wrapper.findAll('.task__calendar-create-button');
 
-		expect(buttons.every((button) => button.attributes('disabled') !== undefined)).toBe(true);
+		expect(buttons).toHaveLength(1);
+		expect(buttons[0].attributes('disabled')).toBeDefined();
 
 		await type(wrapper, 'Дело');
 
-		expect(buttons.every((button) => button.attributes('disabled') === undefined)).toBe(true);
+		expect(buttons[0].attributes('disabled')).toBeUndefined();
 	});
 
 	it('плейсхолдер подставляет выбранную дату', async () => {
@@ -772,33 +810,29 @@ describe('создание задачи', () => {
 			.toBe('Новая задача на 2026-08-20');
 	});
 
-	it('Enter создаёт задачу и не открывает файл', async () => {
+	it('Enter создаёт задачу в файле месяца и не открывает файл', async () => {
 		const { wrapper, vault, app } = await mountCalendar({ tasksFolderPath: '/' });
 
 		await type(wrapper, 'Купить молоко');
 		await wrapper.find('.task__calendar-create').trigger('submit');
 		await flushPromises();
 
-		expect(vault.contentOf(`${TODAY} - Купить молоко.md`))
-			.toBe(`\n- 📅 ${TODAY}\n\t- [ ] Купить молоко\n`);
+		expect(vault.contentOf('2026-08.md')).toBe(`\n- 📅 ${TODAY}\n\t- [ ] Купить молоко\n`);
 		expect(app.workspace.openLinkCalls).toHaveLength(0);
 		expect((wrapper.find('.task__calendar-create-input').element as HTMLInputElement).value)
 			.toBe('');
 	});
 
-	it('левая кнопка создаёт задачу и открывает файл', async () => {
-		const { wrapper, app } = await mountCalendar({ tasksFolderPath: '/' });
+	it('новая задача встаёт в списке дня сверху', async () => {
+		const { wrapper } = await mountCalendar({ tasksFolderPath: '/' });
 
-		await type(wrapper, 'Купить молоко');
-		await wrapper.findAll('.task__calendar-create-button')[0].trigger('click');
-		await flushPromises();
+		for (const text of ['Первая', 'Вторая', 'Третья']) {
+			await type(wrapper, text);
+			await wrapper.find('.task__calendar-create').trigger('submit');
+			await flushPromises();
+		}
 
-		expect(app.workspace.openLinkCalls).toEqual([{
-			linktext: `${TODAY} - Купить молоко.md`,
-			sourcePath: '',
-			newLeaf: false,
-			openViewState: { state: { mode: 'source' } },
-		}]);
+		expect(itemTexts(wrapper)).toEqual(['Третья', 'Вторая', 'Первая']);
 	});
 
 	it('созданная задача сразу видна в списке дня', async () => {

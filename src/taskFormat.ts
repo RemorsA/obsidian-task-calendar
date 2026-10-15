@@ -103,6 +103,12 @@ export interface Task {
 	checked: boolean;
 	/** Ключ сортировки по наименованию. В файл не пишется. */
 	sortKey: string;
+	/**
+	 * Цепочка повтора внутри файла - первый пункт тела без маркера и галочки. В
+	 * месячном файле лежат разные задачи, и «день занят своим блоком» считается
+	 * только по блокам своей цепочки. В файл не пишется.
+	 */
+	chain: string;
 }
 
 /** Значение параметра и строка файла, в которой оно стоит. */
@@ -626,6 +632,30 @@ export const sortKeyOf = (body: string | null): string => {
 	return text || plain.replace(/\s+/g, ' ').trim();
 };
 
+/** Маркер списка с галочкой любого вида - `[ ]`, `[x]`, `[-]`, и у нумерованных тоже. */
+const CHAIN_MARKER = /^(?:[-*+]|\d+[.)])[ \t]+(?:\[[^\]]\](?:[ \t]+|$))?/;
+
+/**
+ * Ключ цепочки повтора: первый пункт тела без маркера и галочки.
+ *
+ * Отдельного айди у цепочки нет, а в одном месячном файле лежат разные задачи.
+ * Блоки одной цепочки - повтор, отмеченный наперёд день, перенесённый экземпляр -
+ * получают копию тела, поэтому первый пункт у них общий. Галочка в ключ не входит:
+ * копии её снимают или переносят.
+ *
+ * Поправили текст первого пункта у текущего блока - старые блоки цепочки с ним
+ * больше не связаны, и дни, занятые ими, череда снова считает своими.
+ */
+export const chainKeyOf = (body: string | null): string => {
+	const first = (body ?? '').split('\n').find((line) => line.trim() !== '');
+
+	return first ? first.trim().replace(CHAIN_MARKER, '').replace(/\s+/g, ' ').trim() : '';
+};
+
+/** Ключ цепочки блока - тот же, что `Task.chain` у его задачи. */
+export const blockChain = (lines: string[], block: ParsedBlock): string =>
+	chainKeyOf(bodyText(lines, block));
+
 /** Путь папки со слэшами по краям и имя файла без расширения. */
 export const splitPath = (path: string): { filePath: string; fileName: string } => {
 	const at = path.lastIndexOf('/');
@@ -676,6 +706,7 @@ export const readTasks = (path: string, content: string): Task[] => {
 			body: body || null,
 			checked: checkboxes.every((i) => isChecked(lines[i])),
 			sortKey: sortKeyOf(body),
+			chain: chainKeyOf(body),
 		});
 	}
 
@@ -899,45 +930,49 @@ export const allChecked = (lines: string[], block: ParsedBlock): boolean => {
 	return boxes.length > 0 && boxes.every((i) => isChecked(lines[i]));
 };
 
-/** Символы, недопустимые в имени файла, и ломающие ссылки Obsidian. */
-const FORBIDDEN_IN_NAME = /[\\/:*?"<>|#^[\]]/g;
-/** Сколько текста оставляем в имени файла. */
-const NAME_LIMIT = 100;
-
 /**
- * Имя файла новой задачи: `YYYY-MM-DD - <текст>`, без расширения.
- *
- * Текст - первый элемент тела без маркера. Эмодзи, ссылки и разметка остаются
- * как есть: имя файла это не ключ сортировки. Пусто - остаётся одна дата.
+ * Имя месячного файла без расширения: `YYYY-MM` по 📅 новой задачи. Задачи
+ * группируются по месяцу своей даты, а не по месяцу создания: задача на 5 ноября,
+ * заведённая в октябре, ляжет в `2026-11`.
  */
-export const taskFileName = (date: string, text: string): string => {
-	const cleaned = text
-		.trimStart()
-		.replace(LIST_MARKER, '')
-		.replace(FORBIDDEN_IN_NAME, ' ')
-		.replace(/\s+/g, ' ')
-		.trim();
+export const monthFileName = (date: string): string => date.slice(0, 7);
 
-	if (!cleaned) return date;
-
-	if (cleaned.length <= NAME_LIMIT) return `${date} - ${cleaned}`;
-
-	// Обрезаем по границе слова, а если слово одно - просто по длине.
-	const cut = cleaned.slice(0, NAME_LIMIT);
-	const space = cut.lastIndexOf(' ');
-	const short = (space > 0 ? cut.slice(0, space) : cut).trim();
-
-	return short ? `${date} - ${short}` : date;
-};
+/** Блок новой задачи: 📅 выбранного дня и один снятый чекбокс. */
+const newTaskLines = (date: string, text: string): string[] =>
+	[paramLine('date', date), `\t- [ ] ${text}`];
 
 /**
- * Текст нового файла задачи: 📅 выбранного дня и один снятый чекбокс.
+ * Текст нового месячного файла с одной задачей.
  *
  * Файл начинается пустой строкой и заканчивается пустой строкой - так его
  * удобнее продолжать руками, дописывая блоки сверху и снизу.
  */
 export const buildTaskFile = (date: string, text: string): string =>
-	['', paramLine('date', date), `\t- [ ] ${text}`, ''].join('\n');
+	['', ...newTaskLines(date, text), ''].join('\n');
+
+/**
+ * Дописать задачу в уже существующий месячный файл - **под всеми задачами**,
+ * сразу за последним блоком. Уже лежащие блоки не двигаются.
+ *
+ * Задач в файле нет: пустой файл получает тот же текст, что новый, а в файл с
+ * чужим текстом блок дописывается в конец, через пустую строку от текста.
+ */
+export const appendTaskBlock = (content: string, date: string, text: string): string => {
+	const lines = content.split('\n');
+	const blocks = parseBlocks(lines);
+	const block = newTaskLines(date, text);
+
+	if (blocks.length > 0) {
+		return applyEdits(lines, [{ at: blockAppendAt(blocks), remove: 0, insert: block }]).join('\n');
+	}
+
+	if (content.trim() === '') return buildTaskFile(date, text);
+
+	let end = lines.length;
+	while (end > 0 && lines[end - 1].trim() === '') end--;
+
+	return applyEdits(lines, [{ at: end, remove: 0, insert: ['', ...block] }]).join('\n');
+};
 
 /**
  * Сравнение наименований одним общим коллатором: собирать его на каждое
@@ -972,11 +1007,21 @@ export const compareByName = (a: Task, b: Task): number => {
 	return compareTail(a, b);
 };
 
-/** По дате, старое сверху. Так идут просроченные. */
-export const compareByDate = (a: Task, b: Task): number => {
-	const byDate = showDate(a).localeCompare(showDate(b));
+/**
+ * По новизне, новое сверху. Так идут невыполненные - и просроченные, и задачи дня.
+ *
+ * Новая задача дописывается под все задачи своего месячного файла, поэтому
+ * новизна - это место блока: ниже в файле - новее. Между файлами сравниваются
+ * имена, у месячных файлов это и есть месяц `YYYY-MM`.
+ *
+ * Время создания файла не годится: на части файловых систем это время последней
+ * смены статуса, и оно сдвигается с каждой записью.
+ */
+export const compareByNewness = (a: Task, b: Task): number => {
+	if (a.fileName !== b.fileName) return a.fileName < b.fileName ? 1 : -1;
+	if (a.filePath !== b.filePath) return a.filePath < b.filePath ? 1 : -1;
 
-	return byDate !== 0 ? byDate : compareByName(a, b);
+	return b.blockIndex - a.blockIndex;
 };
 
 /** Задача просрочена: её дата в прошлом и ✅ нет. */

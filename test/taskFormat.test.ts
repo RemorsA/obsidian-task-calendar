@@ -5,12 +5,15 @@ import {
 	blockDate,
 	blockShape,
 	blockShow,
+	appendTaskBlock,
 	buildTaskFile,
-	compareByDate,
+	chainKeyOf,
 	compareByName,
+	compareByNewness,
 	isOverdue,
 	isValidBlock,
 	blockAppendAt,
+	monthFileName,
 	nextDate,
 	nextFreeDate,
 	movedBlockLines,
@@ -26,7 +29,6 @@ import {
 	sortKeyOf,
 	splitPath,
 	Task,
-	taskFileName,
 	taskVaultPath,
 	toggleCheckbox,
 } from '../src/taskFormat';
@@ -540,38 +542,90 @@ describe('sortKeyOf', () => {
 	});
 });
 
-describe('имя файла задачи', () => {
-	it('дата и текст первого элемента тела', () => {
-		expect(taskFileName('2026-08-20', '- [ ] Купить молоко')).toBe('2026-08-20 - Купить молоко');
+describe('ключ цепочки', () => {
+	it('первый пункт тела без маркера и галочки', () => {
+		expect(chainKeyOf('- [ ] Полить фикус\n\t- [ ] Подзадача')).toBe('Полить фикус');
+		expect(chainKeyOf('- [x] Полить фикус')).toBe('Полить фикус');
+		expect(chainKeyOf('- [-] Полить фикус')).toBe('Полить фикус');
+		expect(chainKeyOf('1. [ ] Полить фикус')).toBe('Полить фикус');
+		expect(chainKeyOf('* Полить   фикус ')).toBe('Полить фикус');
 	});
 
-	it('запрещённые символы заменяются пробелом, пробелы схлопываются', () => {
-		expect(taskFileName('2026-08-20', 'Купить молоко / творог'))
-			.toBe('2026-08-20 - Купить молоко творог');
-		expect(taskFileName('2026-08-20', 'A#B^C[D]E')).toBe('2026-08-20 - A B C D E');
+	it('разметка и эмодзи остаются - это не ключ сортировки', () => {
+		expect(chainKeyOf('- [ ] 📞 [[Таня]]')).toBe('📞 [[Таня]]');
 	});
 
-	it('эмодзи в имени сохраняются - имя файла не ключ сортировки', () => {
-		expect(taskFileName('2026-08-20', '📞 Позвонить Тане'))
-			.toBe('2026-08-20 - 📞 Позвонить Тане');
+	it('пустое тело - пустой ключ', () => {
+		expect(chainKeyOf(null)).toBe('');
+		expect(chainKeyOf('')).toBe('');
 	});
 
-	it('ломающие ссылки скобки уходят вместе с запрещёнными символами', () => {
-		expect(taskFileName('2026-08-20', '- [ ] [[Заметка|Текст]]'))
-			.toBe('2026-08-20 - Заметка Текст');
+	it('у задачи ключ считается при разборе, копии тела дают тот же ключ', () => {
+		const content = taskFileText(
+			{ date: '2026-08-14', repeat: 'Каждый день', body: ['- [ ] Дело', '\t- [ ] Шаг'] },
+			{ date: '2026-08-13', done: '2026-08-13', body: ['- [x] Дело', '\t- [x] Шаг'] },
+			{ date: '2026-08-13', body: ['- [ ] Другое'] },
+		);
+
+		expect(readTasks('note.md', content).map((task) => task.chain))
+			.toEqual(['Дело', 'Дело', 'Другое']);
+	});
+});
+
+describe('месячный файл', () => {
+	it('имя - год и месяц даты задачи', () => {
+		expect(monthFileName('2026-08-20')).toBe('2026-08');
+		expect(monthFileName('2027-01-01')).toBe('2027-01');
 	});
 
-	it('текст обрезается до 100 символов по границе слова', () => {
-		const text = `${'слово '.repeat(30)}хвост`;
-		const name = taskFileName('2026-08-20', text);
+	it('задача дописывается под всеми задачами, лежащие блоки не двигаются', () => {
+		const content = taskFileText(
+			{ date: '2026-08-14', repeat: 'Каждый день', body: ['- [ ] Раз'] },
+			{ date: '2026-08-13', done: '2026-08-13', body: ['- [x] Раз'] },
+		);
 
-		expect(name.length).toBeLessThanOrEqual('2026-08-20 - '.length + 100);
-		expect(name.endsWith('слово')).toBe(true);
+		expect(appendTaskBlock(content, '2026-08-20', 'Два')).toBe([
+			'',
+			'- 📅 2026-08-14',
+			'- 🔁 Каждый день',
+			'\t- [ ] Раз',
+			'- 📅 2026-08-13',
+			'- ✅ 2026-08-13',
+			'\t- [x] Раз',
+			'- 📅 2026-08-20',
+			'\t- [ ] Два',
+			'',
+		].join('\n'));
 	});
 
-	it('пустой текст - имя из одной даты', () => {
-		expect(taskFileName('2026-08-20', '   ')).toBe('2026-08-20');
-		expect(taskFileName('2026-08-20', '///')).toBe('2026-08-20');
+	it('новая задача - последний блок файла', () => {
+		const content = appendTaskBlock(taskFileText({ body: ['- [ ] Раз'] }), '2026-08-20', 'Два');
+		const tasks = readTasks('2026-08.md', content);
+
+		expect(tasks.map((task) => [task.blockIndex, task.body])).toEqual([
+			[0, '- [ ] Раз'],
+			[1, '- [ ] Два'],
+		]);
+	});
+
+	it('текст после последней задачи остаётся ниже новой', () => {
+		const content = ['', '- 📅 2026-08-13', '\t- [ ] Раз', 'Заметка внизу', ''].join('\n');
+
+		expect(appendTaskBlock(content, '2026-08-20', 'Два')).toBe(
+			['', '- 📅 2026-08-13', '\t- [ ] Раз', '- 📅 2026-08-20', '\t- [ ] Два', 'Заметка внизу', '']
+				.join('\n')
+		);
+	});
+
+	it('пустой файл получает тот же текст, что новый', () => {
+		expect(appendTaskBlock('', '2026-08-20', 'Дело')).toBe(buildTaskFile('2026-08-20', 'Дело'));
+		expect(appendTaskBlock('\n\n', '2026-08-20', 'Дело')).toBe(buildTaskFile('2026-08-20', 'Дело'));
+	});
+
+	it('в файл без задач блок дописывается в конец, через пустую строку', () => {
+		expect(appendTaskBlock('# Август\nПросто текст\n\n', '2026-08-20', 'Дело')).toBe(
+			'# Август\nПросто текст\n\n- 📅 2026-08-20\n\t- [ ] Дело\n\n'
+		);
 	});
 });
 
@@ -792,6 +846,7 @@ describe('сортировка и группы', () => {
 		body: '- [ ] Дело',
 		checked: false,
 		sortKey: 'Дело',
+		chain: 'Дело',
 		...over,
 	});
 
@@ -824,11 +879,30 @@ describe('сортировка и группы', () => {
 		expect([second, other].sort(compareByName)[0]).toBe(other);
 	});
 
-	it('просроченные - сначала по дате, старое сверху', () => {
-		const old = task({ date: '2026-08-01', sortKey: 'Яблоко' });
-		const fresh = task({ date: '2026-08-10', sortKey: 'Абрикос' });
+	it('по новизне: в одном файле ниже - новее, дата и наименование не влияют', () => {
+		const first = task({ key: 'first', blockIndex: 0, date: '2026-08-20', sortKey: 'Абрикос' });
+		const second = task({ key: 'second', blockIndex: 1, date: '2026-08-01', sortKey: 'Яблоко' });
 
-		expect([fresh, old].sort(compareByDate)[0]).toBe(old);
+		expect([first, second].sort(compareByNewness).map((item) => item.key))
+			.toEqual(['second', 'first']);
+	});
+
+	it('по новизне между файлами - по имени файла: поздний месяц выше', () => {
+		const august = task({ key: 'august', fileName: '2026-08', blockIndex: 5 });
+		const september = task({ key: 'september', fileName: '2026-09', blockIndex: 0 });
+		const january = task({ key: 'january', fileName: '2027-01', blockIndex: 0 });
+
+		expect([august, january, september].sort(compareByNewness).map((item) => item.key))
+			.toEqual(['january', 'september', 'august']);
+	});
+
+	it('по новизне: одноимённые файлы разных папок не смешиваются', () => {
+		const a = task({ key: 'a0', filePath: '/А/', fileName: '2026-08', blockIndex: 0 });
+		const a1 = task({ key: 'a1', filePath: '/А/', fileName: '2026-08', blockIndex: 1 });
+		const b = task({ key: 'b0', filePath: '/Б/', fileName: '2026-08', blockIndex: 0 });
+
+		expect([a, b, a1].sort(compareByNewness).map((item) => item.key))
+			.toEqual(['b0', 'a1', 'a0']);
 	});
 
 	it('просрочена: 📅 в прошлом и ✅ нет', () => {
@@ -842,14 +916,5 @@ describe('сортировка и группы', () => {
 		// Уехал вперёд - долгом быть перестал, уехал назад - стал.
 		expect(isOverdue(task({ date: '2026-08-12', move: '2026-08-20' }), '2026-08-13')).toBe(false);
 		expect(isOverdue(task({ date: '2026-08-20', move: '2026-08-12' }), '2026-08-13')).toBe(true);
-	});
-
-	it('по дате сортирует по дню показа', () => {
-		const list = [
-			task({ key: 'moved', date: '2026-08-10', move: '2026-08-20' }),
-			task({ key: 'plain', date: '2026-08-15' }),
-		];
-
-		expect(list.sort(compareByDate).map((item) => item.key)).toEqual(['plain', 'moved']);
 	});
 });
