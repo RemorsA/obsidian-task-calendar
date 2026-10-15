@@ -68,24 +68,13 @@
 		</div>
 
 		<!--
-			Кнопка слева создаёт задачу и открывает файл, кнопка справа - только
-			создаёт. Enter отправляет форму, то есть создаёт без перехода: на
-			телефоне переход после каждой задачи мешал бы заводить их подряд.
+			Кнопка и Enter создают задачу без перехода в файл: на телефоне переход
+			после каждой задачи мешал бы заводить их подряд.
 		-->
 		<form
 			class="task__calendar-create"
-			@submit.prevent="handleCreateTask(false)"
+			@submit.prevent="handleCreateTask"
 		>
-			<button
-				class="task__calendar-default-button task__calendar-create-button"
-				type="button"
-				aria-label="Создать задачу и перейти"
-				:disabled="isCreateButtonDisabled"
-				@click="handleCreateTask(true)"
-			>
-				<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 1024 1024"><!-- Icon from Element Plus by Element Plus - https://github.com/element-plus/element-plus-icons/blob/main/packages/svg/package.json --><path fill="currentColor" d="M768 256H353.6a32 32 0 1 1 0-64H800a32 32 0 0 1 32 32v448a32 32 0 0 1-64 0z"/><path fill="currentColor" d="M777.3 201.3a32 32 0 0 1 45.4 45.4l-544 544a32 32 0 0 1-45.4-45.4z"/></svg>
-			</button>
-
 			<input
 				ref="taskNameInput"
 				v-model="actionText"
@@ -116,6 +105,7 @@
 			Список идёт одним порядком, без разделителей: сначала просроченные,
 			потом задачи выбранного дня, в конце выполненные. Группы различает вид
 			самой карточки - рамка у просроченной, перечёркнутый текст у выполненной.
+			Внутри невыполненных групп - новое сверху, выполненные - по наименованию.
 		-->
 		<div
 			v-else
@@ -183,8 +173,8 @@ import type { OpenViewState } from 'obsidian';
 import type { BlockRange } from '../taskMap';
 import TaskBody from './TaskBody.vue';
 import {
-	compareByDate,
 	compareByName,
+	compareByNewness,
 	DATE_FORMAT,
 	isOverdue,
 	occurrencesInRange,
@@ -286,25 +276,31 @@ const calendarDays = computed<CalendarDay[]>(() => {
 const isToday = (date: string): boolean => date === todayStr.value;
 
 /**
- * Дни, у которых в файле уже есть свой блок. Череда их перескакивает: такой день
- * показывает свой блок, а не расчёт, иначе на нём было бы две карточки. Тем же
- * правилом пользуется генерация в карте, поэтому точки и файл не расходятся.
+ * Цепочка повтора: файл плюс первый пункт тела. В месячном файле лежат разные
+ * задачи, и дни чужих блоков череде не помеха.
+ */
+const chainOf = (task: Task): string => `${taskVaultPath(task)}\n${task.chain}`;
+
+/**
+ * Дни, у которых в цепочке уже есть свой блок. Череда их перескакивает: такой
+ * день показывает свой блок, а не расчёт, иначе на нём было бы две карточки. Тем
+ * же правилом пользуется генерация в карте, поэтому точки и файл не расходятся.
  */
 const takenDays = computed<Map<string, Set<string>>>(() => {
-	const byFile = new Map<string, Set<string>>();
+	const byChain = new Map<string, Set<string>>();
 
 	for (const task of tasks.value) {
-		const path = taskVaultPath(task);
-		const days = byFile.get(path) ?? new Set<string>();
+		const chain = chainOf(task);
+		const days = byChain.get(chain) ?? new Set<string>();
 
 		// Оба дня перенесённого экземпляра: 📅 - день череды, с которого он уехал,
 		// ↔️ - день показа. Череда не возвращается ни туда, ни туда.
 		days.add(task.date);
 		days.add(showDate(task));
-		byFile.set(path, days);
+		byChain.set(chain, days);
 	}
 
-	return byFile;
+	return byChain;
 });
 
 /**
@@ -318,7 +314,7 @@ const repeatDays = (task: Task, from: string, to: string): string[] => {
 	const repeat = parseRepeat(task.repeat);
 	if (!repeat) return [];
 
-	const taken = takenDays.value.get(taskVaultPath(task));
+	const taken = takenDays.value.get(chainOf(task));
 
 	return occurrencesInRange(task.date, repeat, from, to, taken);
 };
@@ -347,7 +343,7 @@ const daysWithTasks = computed<Set<string>>(() => {
 
 /** Просроченные - в списке любого выбранного дня, чтобы о долге не забыть. */
 const overdueTasks = computed<Task[]>(() =>
-	tasks.value.filter((task) => isOverdue(task, todayStr.value)).sort(compareByDate)
+	tasks.value.filter((task) => isOverdue(task, todayStr.value)).sort(compareByNewness)
 );
 
 /** Задачи выбранного дня. Просроченная сюда не попадает - она уже в своей группе. */
@@ -356,7 +352,7 @@ const selectedTasks = computed<Task[]>(() =>
 		.filter((task) => showDate(task) === selectedDate.value
 			&& task.done === null
 			&& !isOverdue(task, todayStr.value))
-		.sort(compareByName)
+		.sort(compareByNewness)
 );
 
 /**
@@ -391,7 +387,7 @@ const projectedTasks = computed<Task[]>(() => {
 		.filter((task) => task.done === null
 			&& !shown.has(task.key)
 			&& repeatDays(task, day, day).length > 0)
-		.sort(compareByName);
+		.sort(compareByNewness);
 });
 
 const cards = computed<TaskCard[]>(() => [
@@ -400,7 +396,7 @@ const cards = computed<TaskCard[]>(() => [
 		modifier: '--is-overdue',
 		date: showDate(task),
 	})),
-	...[...selectedTasks.value, ...projectedTasks.value].sort(compareByName).map((task) => ({
+	...[...selectedTasks.value, ...projectedTasks.value].sort(compareByNewness).map((task) => ({
 		task,
 		modifier: '',
 		date: selectedDate.value,
@@ -429,21 +425,16 @@ const handleClickDayNumber = (day: CalendarDay): void => {
 };
 
 /**
- * Открыть заметку по пути. В режиме правки - вторым аргументом.
+ * Открыть заметку по пути в режиме правки.
  *
  * `range` - строки блока задачи. Obsidian подсветит их той же вспышкой, что и
  * цель ссылки `[[Заметка#Заголовок]]`, прокрутит к ним и поставит курсор в
  * начало блока: `startLoc`/`endLoc` читает режим правки, `line` - режим чтения.
  * Выделения нет - случайное нажатие клавиши блок не сотрёт.
  */
-const openNote = async (
-	path: string,
-	edit = false,
-	range: BlockRange | null = null
-): Promise<void> => {
-	const viewState: OpenViewState = {};
+const openNote = async (path: string, range: BlockRange | null): Promise<void> => {
+	const viewState: OpenViewState = { state: { mode: 'source' } };
 
-	if (edit) viewState.state = { mode: 'source' };
 	if (range) {
 		viewState.eState = {
 			line: range.start.line,
@@ -453,12 +444,7 @@ const openNote = async (
 	}
 
 	try {
-		await props.plugin.app.workspace.openLinkText(
-			path,
-			'',
-			false,
-			edit || range ? viewState : undefined
-		);
+		await props.plugin.app.workspace.openLinkText(path, '', false, viewState);
 	} catch (error) {
 		console.error(`${path}:`, error);
 		new Notice('Не удалось открыть заметку');
@@ -469,20 +455,16 @@ const openNote = async (
 const taskNameInput = ref<HTMLInputElement | null>(null);
 
 /**
- * Создать задачу на выбранный день: новый файл с 📅 и одним снятым чекбоксом.
- *
- * Открытие идёт отдельным шагом после создания - не открывшаяся вкладка не повод
- * говорить, что задачу не создали.
+ * Создать задачу на выбранный день: блок с 📅 и одним снятым чекбоксом в
+ * месячном файле. Куда именно он ляжет, решает карта.
  */
-const handleCreateTask = async (open: boolean): Promise<void> => {
+const handleCreateTask = async (): Promise<void> => {
 	if (isCreateButtonDisabled.value) return;
 
 	const path = await taskMap.createTask(selectedDate.value, actionText.value);
 	if (!path) return;
 
 	actionText.value = '';
-
-	if (open) await openNote(path, true);
 };
 
 /**
@@ -493,7 +475,7 @@ const handleCreateTask = async (open: boolean): Promise<void> => {
 const handleClickTaskLink = async (task: Task): Promise<void> => {
 	const range = await taskMap.locate(task.key);
 
-	await openNote(taskVaultPath(task), true, range);
+	await openNote(taskVaultPath(task), range);
 };
 
 /**

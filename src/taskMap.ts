@@ -2,7 +2,9 @@ import { Notice, TAbstractFile, TFile, TFolder, debounce, moment } from 'obsidia
 import type TaskCalendarPlugin from './TaskCalendarPlugin';
 import {
 	allChecked,
+	appendTaskBlock,
 	applyEdits,
+	blockChain,
 	blockDate,
 	blockShow,
 	blockAppendAt,
@@ -19,6 +21,7 @@ import {
 	ParamName,
 	ParsedBlock,
 	parseBlocks,
+	monthFileName,
 	parseRepeat,
 	readTasks,
 	removeParamEdit,
@@ -26,7 +29,6 @@ import {
 	setParamEdit,
 	showDate,
 	Task,
-	taskFileName,
 	taskVaultPath,
 	toggleCheckboxEdit,
 } from './taskFormat';
@@ -70,11 +72,16 @@ export interface BlockRange {
  * Занятыми считаются оба дня перенесённого блока: 📅 - день череды, с которого он
  * уехал, ↔️ - день, на котором он теперь показывается. Череда не должна вернуться
  * ни туда, ни туда.
+ *
+ * Считаются только блоки своей цепочки (`chain`): в месячном файле рядом лежат
+ * чужие задачи, и их дни череде не помеха.
  */
-const takenDays = (blocks: ParsedBlock[]): Set<string> => {
+const takenDays = (lines: string[], blocks: ParsedBlock[], chain: string): Set<string> => {
 	const days = new Set<string>();
 
 	for (const block of blocks) {
+		if (blockChain(lines, block) !== chain) continue;
+
 		const own = blockDate(block);
 		if (own) days.add(own);
 
@@ -419,8 +426,6 @@ export class TaskMap {
 		const blocks = parseBlocks(lines);
 		const edits: Edit[] = [];
 		const today = moment().format(DATE_FORMAT);
-		// Дни, у которых уже есть свой блок: череда их перескакивает.
-		const taken = takenDays(blocks);
 
 		for (const block of blocks) {
 			// Невалидный блок автоматика не трогает: сняли из тела все чекбоксы -
@@ -444,7 +449,10 @@ export class TaskMap {
 			// Повтора нет - задача просто закрылась.
 			const repeat = parseRepeat(block.params.repeat?.value);
 			const base = blockDate(block);
-			const next = repeat && base ? nextFreeDate(base, repeat, taken) : null;
+			// Дни, у которых уже есть свой блок этой цепочки: череда их перескакивает.
+			const next = repeat && base
+				? nextFreeDate(base, repeat, takenDays(lines, blocks, blockChain(lines, block)))
+				: null;
 			if (!next) continue;
 
 			// Новый блок встаёт непосредственно над закрытым, 🔁 уходит из него: в
@@ -628,7 +636,7 @@ export class TaskMap {
 				return applyEdits(lines, [setParamEdit(block, name, date)]).join('\n');
 			}
 
-			const taken = takenDays(blocks);
+			const taken = takenDays(lines, blocks, blockChain(lines, block));
 			taken.add(date);
 			taken.add(day);
 
@@ -696,12 +704,13 @@ export class TaskMap {
 	}
 
 	/**
-	 * Создать задачу на дату: новый файл в папке для новых задач, 📅 и один снятый
-	 * чекбокс с текстом из поля. Возвращает путь созданного файла или null.
+	 * Создать задачу на дату в месячном файле: `YYYY-MM.md` по 📅 задачи, в папке
+	 * для новых задач. Файла этого месяца нет - он создаётся, есть - задача
+	 * дописывается в него под всеми задачами. Блок - 📅 и один снятый чекбокс с
+	 * текстом из поля. Возвращает путь файла или null.
 	 *
-	 * Имя файла складывается один раз при создании и дальше не меняется:
-	 * переименование ломало бы ссылки `[[...]]` на заметку, а дата и текст в карте
-	 * и так берутся из содержимого блока.
+	 * Имя файла дальше не меняется: переименование ломало бы ссылки `[[...]]` на
+	 * заметку, а дата и текст в карте и так берутся из содержимого блока.
 	 */
 	async createTask(date: string, text: string): Promise<string | null> {
 		const value = text.trim();
@@ -719,22 +728,26 @@ export class TaskMap {
 			return null;
 		}
 
-		const base = taskFileName(date, value);
-		const pathOf = (name: string): string => (folder ? `${folder}/${name}.md` : `${name}.md`);
-
-		// Файл с таким именем уже есть - дописываем 2, 3 и так далее.
-		let name = base;
-		for (let n = 2; vault.getAbstractFileByPath(pathOf(name)); n++) name = `${base} ${n}`;
-
-		const path = pathOf(name);
+		const name = monthFileName(date);
+		const path = folder ? `${folder}/${name}.md` : `${name}.md`;
+		const existing = vault.getAbstractFileByPath(path);
 
 		try {
-			const file = await vault.create(path, buildTaskFile(date, value));
-
 			// Индексируем сразу: карточка должна появиться, не дожидаясь debounce.
-			if (file instanceof TFile) {
-				await this.indexFile(file);
-				this.notify();
+			if (existing instanceof TFile) {
+				const written = await vault.process(
+					existing,
+					(current) => appendTaskBlock(current, date, value)
+				);
+
+				if (await this.syncContent(existing, written)) this.notify();
+			} else {
+				const file = await vault.create(path, buildTaskFile(date, value));
+
+				if (file instanceof TFile) {
+					await this.indexFile(file);
+					this.notify();
+				}
 			}
 		} catch (error) {
 			console.error(`${path}:`, error);

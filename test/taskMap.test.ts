@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { TFile } from './mocks/obsidian';
+import { Notice, TFile } from './mocks/obsidian';
 import { createPluginDouble, PluginDouble, taskFileText, TODAY, useFixedClock } from './helpers';
 import { TaskMap } from '../src/taskMap';
 import { showDate } from '../src/taskFormat';
@@ -822,30 +822,124 @@ describe('карта задач', () => {
 		});
 	});
 
+	describe('несколько задач в одном месячном файле', () => {
+		/** Ежедневная задача сегодня и чужие блоки рядом с ней. */
+		const monthFile = (...others: Parameters<typeof taskFileText>) => ({
+			'2026-08.md': taskFileText(
+				{ date: TODAY, repeat: 'Каждый день', body: ['- [ ] Полить фикус'] },
+				...others,
+			),
+		});
+
+		/** Текущий блок цепочки - тот, у которого остался 🔁. */
+		const chainDate = (): string | undefined =>
+			map.all().find((task) => task.repeat !== null)?.date;
+
+		it('повтор не перескакивает день чужой задачи', async () => {
+			await setup({ files: monthFile({ date: '2026-08-14', body: ['- [ ] Позвонить'] }) });
+
+			await map.toggleCheckbox('/2026-08.md#0', 0);
+
+			expect(chainDate()).toBe('2026-08-14');
+		});
+
+		it('свой занятый день перескакивает, чужой - нет', async () => {
+			await setup({
+				files: monthFile(
+					{ date: '2026-08-14', done: TODAY, body: ['- [x] Полить фикус'] },
+					{ date: '2026-08-15', body: ['- [ ] Позвонить'] },
+				),
+			});
+
+			await map.toggleCheckbox('/2026-08.md#0', 0);
+
+			expect(chainDate()).toBe('2026-08-15');
+		});
+
+		it('перенос: череда шагает на ближайший день, занятый чужой задачей', async () => {
+			await setup({ files: monthFile({ date: '2026-08-14', body: ['- [ ] Позвонить'] }) });
+
+			await map.moveTask('/2026-08.md#0', '2026-08-20');
+
+			expect(chainDate()).toBe('2026-08-14');
+		});
+	});
+
 	describe('создание задачи', () => {
-		it('имя файла из даты и текста, тело - один снятый чекбокс', async () => {
+		it('файла месяца нет - создаётся YYYY-MM.md с одной задачей', async () => {
 			await setup({ files: {}, tasksFolderPath: '/' });
 
 			const path = await map.createTask('2026-08-20', 'Купить молоко / творог');
 
-			expect(path).toBe('2026-08-20 - Купить молоко творог.md');
+			expect(path).toBe('2026-08.md');
 			expect(double.vault.contentOf(path!)).toBe(
 				'\n- 📅 2026-08-20\n\t- [ ] Купить молоко / творог\n'
 			);
 			expect(map.all()[0]).toMatchObject({ date: '2026-08-20', body: '- [ ] Купить молоко / творог' });
 		});
 
-		it('второй задаче с тем же именем дописывается номер', async () => {
+		it('файл месяца есть - задача дописывается под всеми задачами', async () => {
 			await setup({ files: {}, tasksFolderPath: '/' });
 
-			await map.createTask('2026-08-20', 'Дело');
-			const second = await map.createTask('2026-08-20', 'Дело');
+			await map.createTask('2026-08-20', 'Раз');
+			const second = await map.createTask('2026-08-05', 'Два');
 
-			expect(second).toBe('2026-08-20 - Дело 2.md');
-			expect(double.vault.paths().sort()).toEqual([
-				'2026-08-20 - Дело 2.md',
-				'2026-08-20 - Дело.md',
+			expect(second).toBe('2026-08.md');
+			expect(double.vault.paths()).toEqual(['2026-08.md']);
+			expect(double.vault.contentOf('2026-08.md')).toBe([
+				'',
+				'- 📅 2026-08-20',
+				'\t- [ ] Раз',
+				'- 📅 2026-08-05',
+				'\t- [ ] Два',
+				'',
+			].join('\n'));
+			expect(map.all().map((task) => [task.key, task.date])).toEqual([
+				['/2026-08.md#0', '2026-08-20'],
+				['/2026-08.md#1', '2026-08-05'],
 			]);
+		});
+
+		it('месяц берётся по дате задачи, а не по сегодняшнему дню', async () => {
+			await setup({ files: {}, tasksFolderPath: '/' });
+
+			expect(await map.createTask('2026-09-05', 'Осень')).toBe('2026-09.md');
+			expect(await map.createTask(TODAY, 'Сегодня')).toBe('2026-08.md');
+		});
+
+		it('лежащие в файле блоки не двигаются и автоматику не будят', async () => {
+			const before = taskFileText(
+				{ date: '2026-08-14', repeat: 'Каждый день', body: ['- [ ] Полить фикус'] },
+				{ date: TODAY, done: TODAY, body: ['- [x] Полить фикус'] },
+			);
+			await setup({ files: { 'Задачи/2026-08.md': before }, tasksFolderPath: '/Задачи' });
+
+			await map.createTask('2026-08-20', 'Дело');
+
+			expect(double.vault.contentOf('Задачи/2026-08.md')).toBe([
+				'',
+				'- 📅 2026-08-14',
+				'- 🔁 Каждый день',
+				'\t- [ ] Полить фикус',
+				`- 📅 ${TODAY}`,
+				`- ✅ ${TODAY}`,
+				'\t- [x] Полить фикус',
+				'- 📅 2026-08-20',
+				'\t- [ ] Дело',
+				'',
+			].join('\n'));
+			expect(double.vault.calls.process).toBe(1);
+			expect(map.all()).toHaveLength(3);
+		});
+
+		it('файл месяца не записался - null и сообщение, карта прежняя', async () => {
+			await setup({ files: { '2026-08.md': taskFileText() }, tasksFolderPath: '/' });
+			double.vault.failures.modify = new Set(['2026-08.md']);
+			vi.spyOn(console, 'error').mockImplementation(() => {});
+
+			expect(await map.createTask('2026-08-20', 'Дело')).toBeNull();
+			expect(Notice.messages).toContain('Не удалось создать задачу');
+			expect(map.all()).toHaveLength(1);
 		});
 
 		it('папки задач нет - создаётся при первой записи', async () => {
@@ -853,7 +947,7 @@ describe('карта задач', () => {
 
 			const path = await map.createTask('2026-08-20', 'Дело');
 
-			expect(path).toBe('Календарь задач/2026-08-20 - Дело.md');
+			expect(path).toBe('Календарь задач/2026-08.md');
 			expect(map.all()).toHaveLength(1);
 		});
 
@@ -867,10 +961,10 @@ describe('карта задач', () => {
 			double.plugin.settings.tasksFolderPath = '/Другое';
 			const path = await map.createTask('2026-08-20', 'Дело');
 
-			expect(path).toBe('Другое/2026-08-20 - Дело.md');
+			expect(path).toBe('Другое/2026-08.md');
 			expect(map.all().map((task) => task.key).sort()).toEqual([
 				'/note.md#0',
-				'/Другое/2026-08-20 - Дело.md#0',
+				'/Другое/2026-08.md#0',
 			]);
 		});
 
