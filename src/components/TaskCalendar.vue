@@ -117,6 +117,19 @@
 				:class="['tasks__item', card.modifier]"
 			>
 				<!--
+					🔁 в левом верхнем углу: задача повторяется. Правый верх уже
+					занят датой и ссылкой, а тело отбивает сверху 40px как раз под эти
+					элементы, поэтому левый угол остаётся свободным.
+				-->
+				<span
+					v-if="card.task.repeat"
+					class="tasks__item-repeat"
+					title="Повторяющаяся задача"
+				>
+					<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 1024 1024"><!-- Icon from Element Plus by Element Plus - https://github.com/element-plus/element-plus-icons/blob/main/packages/svg/package.json --><path fill="currentColor" d="M771.8 794.9A384 384 0 0 1 128 512h64a320 320 0 0 0 555.7 216.4h-93a32 32 0 1 1 0-64h149a32 32 0 0 1 32 32v149a32 32 0 1 1-64 0zM276.3 295.6h93a32 32 0 0 1 0 64H220.2a32 32 0 0 1-32-32v-149a32 32 0 0 1 64 0V229a384 384 0 0 1 644 282.9h-64a320 320 0 0 0-555.8-216.4z"/></svg>
+				</span>
+
+				<!--
 					Дату меняет штатный календарь браузера: у поля type="date" он
 					открывается по showPicker() и сам знает, как выглядеть на телефоне
 					и на ПК. Поле рядом с кнопкой, а не спрятано насовсем: невидимому
