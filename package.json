@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-task-calendar",
-	"version": "3.0.0",
+	"version": "1.0.0",
 	"description": "Creating and viewing tasks via the calendar.",
 	"main": "main.js",
 	"scripts": {
