@@ -184,6 +184,31 @@
 			position: relative;
 			min-height: 40px;
 
+			/*
+			 * 🔁 повторяющейся задачи - левый верхний угол: правый уже занят
+			 * датой (right: 40px) и ссылкой (right: 0), а тело отбивает сверху
+			 * 40px как раз под эти элементы. Размер и размер иконки - как у
+			 * кнопок в том же углу.
+			 */
+			.tasks__item-repeat {
+				position: absolute;
+				top: 0;
+				right: 80px;
+				z-index: 1;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				padding: 5px;
+				height: 40px;
+				font-size: 20px;
+				line-height: 1;
+
+				svg {
+					height: 20px;
+					color: yellow;
+				}
+			}
+
 			.tasks__item-link-button {
 				position: absolute;
 				top: 0;

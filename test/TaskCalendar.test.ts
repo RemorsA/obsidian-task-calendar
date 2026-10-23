@@ -194,6 +194,29 @@ describe('список задач', () => {
 		expect(wrapper.text()).not.toContain('Каждый день');
 	});
 
+	it('эмодзи повтора - только у повторяющейся карточки', async () => {
+		const { wrapper } = await mountCalendar({
+			files: {
+				'повтор.md': taskFileText({
+					date: TODAY,
+					repeat: 'Каждый день',
+					body: ['- [ ] Купить молоко'],
+				}),
+				'разовая.md': taskFileText({
+					date: TODAY,
+					body: ['- [ ] Разовое дело'],
+				}),
+			},
+		});
+
+		const items = wrapper.findAll('.tasks__item');
+		const cardOf = (text: string) =>
+			items.find((item) => item.find('.tasks__item-body').text().includes(text));
+
+		expect(cardOf('Купить молоко')?.find('.tasks__item-repeat').exists()).toBe(true);
+		expect(cardOf('Разовое дело')?.find('.tasks__item-repeat').exists()).toBe(false);
+	});
+
 	it('в пустом дне карточек нет', async () => {
 		const { wrapper } = await mountCalendar({
 			files: { 'note.md': taskFileText({ date: '2026-08-20' }) },
