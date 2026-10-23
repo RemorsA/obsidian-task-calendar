@@ -1,7 +1,7 @@
 {
 	"id": "task-calendar",
 	"name": "Task calendar",
-	"version": "3.0.0",
+	"version": "1.0.0",
 	"minAppVersion": "1.6.0",
 	"description": "Creating and viewing tasks via the calendar.",
 	"author": "RemorsA",
