@@ -1,19 +1,16 @@
 import { moment } from 'obsidian';
 
 /**
- * Формат задачи 3.0: блок строк списка с эмодзи, тело с отступом.
+ * Формат задачи: строка задачи с параметрами-эмодзи, подзадачи с отступом под ней.
  *
  * ```
- * - 📅 2026-08-21
- * - 🔁 Каждый день
- * - ✅ 2026-08-21
- * 	- [ ] Купить молоко
+ * - [ ] Купить молоко 📅 2026-08-21 🔁 Каждый день ✅ 2026-08-21
+ * 	- [ ] Проверить срок
  * ```
  *
- * **Файл - авторитет.** Любую строку параметров можно выставить, изменить или
- * удалить руками: плагин ничего не нормализует и не переписывает по своей
- * инициативе. Единственная автоматика в файле - переключение чекбокса
- * (см. `taskMap.ts`).
+ * **Файл - авторитет.** Любой параметр можно выставить, изменить или удалить
+ * руками: плагин ничего не нормализует и не переписывает по своей инициативе.
+ * Единственная автоматика в файле - переключение чекбокса (см. `taskMap.ts`).
  *
  * Задача - это файл, конкретный экземпляр (текущий блок или архивный блок
  * цепочки повтора) адресуется парой «файл + порядковый номер блока».
@@ -50,10 +47,24 @@ const PARAM_BY_EMOJI: Record<string, ParamName> = {
 };
 
 /**
- * Строка параметра: пункт списка, эмодзи и **непустое** значение. Одно без
- * другого параметром не считается - `- 📅` без даты это обычный пункт.
+ * Начало строки задачи: маркер списка и галочка. Параметры ищутся в тексте после
+ * него. Пункт без галочки задачей не бывает - поэтому и блоки старого формата
+ * (`- 📅 2026-08-21` отдельной строкой) не подхватываются даже наполовину.
  */
-const PARAM_LINE = /^(?:[-*+]|\d+[.)])[ \t]+(\u{1F4C5}|↔️?|\u{1F501}|✅)[ \t]*(\S.*)$/u;
+const TASK_HEAD = /^(?:[-*+]|\d+[.)])[ \t]+\[[^\]]\](?:[ \t]+|$)/;
+
+/**
+ * Значение 📅, ↔️ и ✅: слово вида YYYY-MM-DD сразу за эмодзи. Другое слово
+ * значением не считается, и эмодзи остаётся текстом: в «✅ Проверить отчёт»
+ * параметра нет, и выполнение не перепишет «Проверить» датой.
+ */
+const DATE_WORD = /^\s*(\d{4}-\d{2}-\d{2})(?=\s|$)/;
+
+/**
+ * Эмодзи параметра. Параметр начинается только в начале текста или после
+ * пробела: эмодзи, приклеенный к слову, - часть текста задачи.
+ */
+const PARAM_EMOJI = /(^|\s)(\u{1F4C5}|↔️?|\u{1F501}|✅)/u;
 
 /** Строка списка любого уровня: `- пункт`, `* пункт`, `1. пункт`, `2) пункт`. */
 const LIST_LINE = /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+/;
@@ -63,6 +74,19 @@ const CHECKBOX_LINE = /^([ \t]*(?:[-*+]|\d+[.)])[ \t]+\[)([^\]])(\].*)$/;
 
 /** Открытие или закрытие блока кода: внутри него списков не бывает. */
 const FENCE_LINE = /^[ \t]*(?:```|~~~)/;
+
+/** Открытие блока кода нулевого уровня: сама ограда - три и больше ` или ~. */
+const FENCE_OPEN = /^(`{3,}|~{3,})/;
+
+/**
+ * Строка закрывает блок кода: та же ограда (тот же символ, не короче открывающей)
+ * и ничего, кроме неё. ``` внутри блока ~~~ его не закрывает - как в Markdown.
+ */
+const closesFence = (line: string, open: string): boolean => {
+	const close = line.match(/^[ \t]{0,3}(`{3,}|~{3,})[ \t]*$/)?.[1];
+
+	return close !== undefined && close[0] === open[0] && close.length >= open.length;
+};
 
 /** Строго YYYY-MM-DD: времени и таймзон формат не хранит. */
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
@@ -111,23 +135,23 @@ export interface Task {
 	chain: string;
 }
 
-/** Значение параметра и строка файла, в которой оно стоит. */
+/** Значение параметра и его место в строке задачи: от эмодзи до конца значения. */
 export interface BlockParam {
-	line: number;
 	value: string;
+	from: number;
+	to: number;
 }
 
-/** Разобранный блок: строки параметров и строки тела - номерами строк файла. */
+/** Разобранный блок: строка задачи и строки тела - номерами строк файла. */
 export interface ParsedBlock {
 	index: number;
-	/** Первая строка блока. Новый блок повтора вставляется прямо перед ней. */
+	/** Строка задачи. Новый блок повтора вставляется прямо перед ней. */
 	start: number;
 	/** Последняя строка блока. */
 	end: number;
+	/** Параметры строки задачи. */
 	params: Partial<Record<ParamName, BlockParam>>;
-	/** Строки параметров по возрастанию. */
-	paramLines: number[];
-	/** Строки тела по возрастанию - всё, что с отступом. */
+	/** Строки тела по возрастанию: строка задачи и всё, что с отступом под ней. */
 	body: number[];
 }
 
@@ -422,72 +446,112 @@ export const nextFreeDate = (
 	return null;
 };
 
-/** Разобрать строку параметра нулевого уровня. */
-const matchParam = (line: string): { name: ParamName; value: string } | null => {
-	const parts = line.match(PARAM_LINE);
-	if (!parts) return null;
+/**
+ * Параметры строки задачи и их место в строке.
+ *
+ * - 📅, ↔️, ✅ - значение одно слово вида YYYY-MM-DD сразу за эмодзи. Что идёт за
+ *   ним до следующего параметра (тег, текст), остаётся текстом задачи.
+ * - 🔁 - значение весь текст до следующего параметра, тега или конца строки:
+ *   повтор пишется словами.
+ * - Эмодзи без значения параметром не считается - `📅` без даты это текст.
+ * - Параметр повторился - в счёт идёт первый, остальные остаются текстом.
+ *
+ * Не строка задачи (абзац, пункт без галочки) - параметров нет: там эмодзи
+ * ничего не значат.
+ */
+export const lineParams = (line: string): Partial<Record<ParamName, BlockParam>> => {
+	const params: Partial<Record<ParamName, BlockParam>> = {};
+	const head = line.match(TASK_HEAD);
+	if (!head) return params;
 
-	const name = PARAM_BY_EMOJI[parts[1]];
+	const offset = head[0].length;
+	const text = line.slice(offset);
+	const marks: { at: number; emoji: string }[] = [];
+	const search = new RegExp(PARAM_EMOJI.source, 'gu');
+	let match: RegExpExecArray | null;
 
-	return name ? { name, value: parts[2].trim() } : null;
+	while ((match = search.exec(text)) !== null) {
+		marks.push({ at: match.index + match[1].length, emoji: match[2] });
+	}
+
+	marks.forEach((mark, i) => {
+		const name = PARAM_BY_EMOJI[mark.emoji];
+		if (!name || params[name]) return;
+
+		const from = mark.at + mark.emoji.length;
+		const region = text.slice(from, i + 1 < marks.length ? marks[i + 1].at : text.length);
+		const word = region.match(DATE_WORD);
+		// Тег повтором не бывает: `#` в грамматике нет, а с ним 🔁 не разобрался бы.
+		const words = region.split(/\s#/)[0];
+		const value = name === 'repeat' ? words.trim() : word?.[1] ?? '';
+		if (!value) return;
+
+		const end = name === 'repeat' ? words.trimEnd().length : (word?.[0].length ?? 0);
+		params[name] = { value, from: offset + mark.at, to: offset + from + end };
+	});
+
+	return params;
 };
 
 /**
  * Разобрать файл на блоки.
  *
- * **Граница блока.** Новый блок открывается, когда встречена строка параметра
- * нулевого уровня и при этом либо такой параметр в текущем блоке уже есть, либо
- * у текущего блока уже началось тело. Пустые строки границей не являются.
+ * Блок открывает **строка задачи** - пункт списка нулевого уровня с галочкой, в
+ * котором есть хотя бы один параметр. Каждая такая строка - свой блок, даже если
+ * они идут подряд. Пустые строки границей не являются.
  *
- * Тело - строки с отступом сразу под параметрами. Строка нулевого уровня, которая
- * параметром не является (абзац, заголовок, чужой пункт списка), в блок не
- * попадает и **блок закрывает**: строки с отступом под ней принадлежат ей, а не
- * задаче выше. Иначе подпункты соседнего списка ниже по заметке уезжали бы в тело
- * задачи с датой.
+ * Тело - строка задачи и строки с отступом под ней. Строка нулевого уровня без
+ * параметров (абзац, заголовок, чужой пункт списка) в блок не попадает и **блок
+ * закрывает**: строки с отступом под ней принадлежат ей, а не задаче выше. Иначе
+ * подпункты соседнего списка ниже по заметке уезжали бы в тело задачи с датой.
  */
 export const parseBlocks = (lines: string[]): ParsedBlock[] => {
 	const blocks: ParsedBlock[] = [];
 	let current: ParsedBlock | null = null;
+	/**
+	 * Открывающая строка блока кода нулевого уровня, пока он не закрыт. Его строки
+	 * - пример, а не задачи: без этого `- [ ] Task 📅 ...` внутри ``` ушёл бы в
+	 * календарь, а отметка дописывала бы повторы прямо в код. Блок кода с отступом
+	 * внутри задачи отслеживать не нужно: его строки и так тело, а строку нулевого
+	 * уровня Markdown и так считает концом и пункта, и кода в нём.
+	 */
+	let fence: string | null = null;
 
 	for (let i = 0; i < lines.length; i++) {
 		const line = lines[i];
+
+		if (fence !== null) {
+			if (closesFence(line, fence)) fence = null;
+			continue;
+		}
+
 		if (line.trim() === '') continue;
 
-		const indented = /^[ \t]/.test(line);
-		const param = indented ? null : matchParam(line);
+		if (/^[ \t]/.test(line)) {
+			if (!current) continue;
 
-		if (param) {
-			if (current && (current.params[param.name] || current.body.length > 0)) current = null;
-
-			if (!current) {
-				current = {
-					index: blocks.length,
-					start: i,
-					end: i,
-					params: {},
-					paramLines: [],
-					body: [],
-				};
-				blocks.push(current);
-			}
-
-			current.params[param.name] = { line: i, value: param.value };
-			current.paramLines.push(i);
+			current.body.push(i);
 			current.end = i;
 			continue;
 		}
 
-		// Строка нулевого уровня, не параметр, - конец блока: отступы под ней уже не
-		// тело задачи.
-		if (!indented) {
+		// Блок кода нулевого уровня закрывает задачу над ним, как любая строка без
+		// отступа, и дальше до закрывающей строки всё ничьё.
+		const open = line.match(FENCE_OPEN);
+		if (open) {
+			fence = open[1];
 			current = null;
 			continue;
 		}
 
-		if (!current) continue;
+		// Строка нулевого уровня без параметров - конец блока: отступы под ней уже
+		// не тело задачи.
+		const params = lineParams(line);
+		current = PARAM_ORDER.some((name) => params[name])
+			? { index: blocks.length, start: i, end: i, params, body: [i] }
+			: null;
 
-		current.body.push(i);
-		current.end = i;
+		if (current) blocks.push(current);
 	}
 
 	return blocks;
@@ -580,12 +644,36 @@ export const checkboxLines = (lines: string[], block: ParsedBlock): number[] =>
 const isChecked = (line: string): boolean =>
 	(line.match(CHECKBOX_LINE)?.[2] ?? ' ').toLowerCase() === 'x';
 
+/** Вырезать параметр вместе с пробелами перед ним - чтобы не копить двойные пробелы. */
+const cutParam = (line: string, param: BlockParam): string => {
+	let start = param.from;
+	while (start > 0 && /[ \t]/.test(line[start - 1])) start--;
+
+	return line.slice(0, start) + line.slice(param.to);
+};
+
+/** Строка задачи без параметров: так её показывает карточка и так её копирует повтор. */
+const withoutParams = (line: string): string => {
+	const params = lineParams(line);
+
+	// С конца строки: вырезанный справа параметр не сдвигает тех, что левее.
+	return PARAM_ORDER
+		.map((name) => params[name])
+		.filter((param): param is BlockParam => param !== undefined)
+		.sort((a, b) => b.from - a.from)
+		.reduce(cutParam, line);
+};
+
 /** Тело для карточки: списки блока, отступы в табах, общий отступ снят. */
 const bodyText = (lines: string[], block: ParsedBlock): string => {
 	const levels = bodyLevels(lines, block);
 
 	return renderLines(lines, block)
-		.map((i) => '\t'.repeat(levels.get(i) ?? 0) + lines[i].trimStart())
+		.map((i) => {
+			const line = i === block.start ? withoutParams(lines[i]) : lines[i];
+
+			return '\t'.repeat(levels.get(i) ?? 0) + line.trimStart();
+		})
 		.join('\n');
 };
 
@@ -724,7 +812,7 @@ export const readTasks = (path: string, content: string): Task[] => {
 };
 
 /**
- * Отпечаток блока - **его строки параметров**.
+ * Отпечаток блока - **его параметры**.
  *
  * По нему автоматика узнаёт, что перед ней тот же самый блок, а не другой,
  * съехавший на этот номер: номер сам по себе ненадёжен, вставили блок выше - и
@@ -779,70 +867,119 @@ export const applyEdits = (lines: string[], edits: Edit[]): string[] => {
 	return out;
 };
 
-/** Строка параметра в каноническом виде. */
-export const paramLine = (name: ParamName, value: string): string =>
-	`- ${EMOJI[name]} ${value}`;
+/** Параметр в каноническом виде: `📅 2026-08-21`. */
+const paramText = (name: ParamName, value: string): string => `${EMOJI[name]} ${value}`;
 
 /**
- * Поставить параметр: заменить существующую строку или вписать новую в
- * канонический порядок 📅, 🔁, ✅.
+ * Поставить параметр в строке задачи: заменить существующий на месте или вписать
+ * новый в канонический порядок 📅, ↔️, 🔁, ✅. Остальной текст строки не трогается.
  */
-export const setParamEdit = (block: ParsedBlock, name: ParamName, value: string): Edit => {
-	const existing = block.params[name];
-	if (existing) return { at: existing.line, remove: 1, insert: [paramLine(name, value)] };
+export const withParam = (line: string, name: ParamName, value: string): string => {
+	const params = lineParams(line);
+	const text = paramText(name, value);
+	const existing = params[name];
+	if (existing) return line.slice(0, existing.from) + text + line.slice(existing.to);
 
 	// Место по канону: перед первым параметром, который должен идти позже.
-	const after = PARAM_ORDER.slice(PARAM_ORDER.indexOf(name) + 1)
-		.map((later) => block.params[later]?.line)
-		.filter((line): line is number => line !== undefined);
-	const at = after.length > 0
-		? Math.min(...after)
-		: Math.max(...block.paramLines) + 1;
+	const later = PARAM_ORDER.slice(PARAM_ORDER.indexOf(name) + 1)
+		.map((other) => params[other]?.from)
+		.filter((at): at is number => at !== undefined);
 
-	return { at, remove: 0, insert: [paramLine(name, value)] };
+	if (later.length > 0) {
+		const at = Math.min(...later);
+
+		return `${line.slice(0, at)}${text} ${line.slice(at)}`;
+	}
+
+	// Иначе - за последним параметром, а нет их - в конец текста.
+	const ends = PARAM_ORDER
+		.map((other) => params[other]?.to)
+		.filter((at): at is number => at !== undefined);
+	const at = ends.length > 0 ? Math.max(...ends) : line.trimEnd().length;
+
+	return `${line.slice(0, at)} ${text}${line.slice(at)}`;
 };
 
-/** Убрать параметр. Его нет - править нечего. */
-export const removeParamEdit = (block: ParsedBlock, name: ParamName): Edit | null => {
-	const existing = block.params[name];
+/** Убрать параметр из строки задачи. Его нет - строка как была. */
+export const withoutParam = (line: string, name: ParamName): string => {
+	const existing = lineParams(line)[name];
 
-	return existing ? { at: existing.line, remove: 1, insert: [] } : null;
+	return existing ? cutParam(line, existing) : line;
 };
+
+/** Снять галочку строки. Не чекбокс - строка как была. */
+export const unchecked = (line: string): string => line.replace(CHECKBOX_LINE, '$1 $3');
 
 /**
- * Копия тела блока. Отступы нормализуются в табы, 1 таб на уровень: своё пишем
- * канонически, чужое не трогаем.
+ * Правка строки задачи целиком. Параметры и галочка задачи живут в одной строке,
+ * поэтому все перемены в ней сводятся в одну правку: две правки одной строки
+ * затёрли бы одна другую.
+ */
+export const taskLineEdit = (
+	lines: string[],
+	block: ParsedBlock,
+	change: (line: string) => string
+): Edit => ({ at: block.start, remove: 1, insert: [change(lines[block.start])] });
+
+/** Поставить параметр: заменить существующий или вписать новый по канону. */
+export const setParamEdit = (
+	lines: string[],
+	block: ParsedBlock,
+	name: ParamName,
+	value: string
+): Edit => taskLineEdit(lines, block, (line) => withParam(line, name, value));
+
+/** Убрать параметр. Его нет - править нечего. */
+export const removeParamEdit = (
+	lines: string[],
+	block: ParsedBlock,
+	name: ParamName
+): Edit | null =>
+	block.params[name] ? taskLineEdit(lines, block, (line) => withoutParam(line, name)) : null;
+
+/**
+ * Копия блока с новыми параметрами. Строка задачи теряет свои параметры и
+ * получает `params` в каноническом порядке, отступы подзадач нормализуются в
+ * табы, 1 таб на уровень: своё пишем канонически, чужое не трогаем.
  *
  * `clear` снимает галочки - новому экземпляру задачи чужие отметки не нужны.
  * Перенос, наоборот, забирает состояние с собой: это тот же экземпляр, просто в
  * другой день.
  */
-const copiedBody = (lines: string[], block: ParsedBlock, clear: boolean): string[] => {
+const copiedBlock = (
+	lines: string[],
+	block: ParsedBlock,
+	params: Partial<Record<ParamName, string>>,
+	clear: boolean
+): string[] => {
 	const levels = bodyLevels(lines, block);
 
 	return block.body.map((i) => {
-		const raw = lines[i].trimStart();
-		const text = clear ? raw.replace(CHECKBOX_LINE, '$1 $3') : raw;
+		if (i === block.start) {
+			const line = withoutParams(lines[i]);
 
-		return '\t'.repeat((levels.get(i) ?? 0) + 1) + text;
+			return PARAM_ORDER.reduce((text, name) => {
+				const value = params[name];
+
+				return value ? withParam(text, name, value) : text;
+			}, clear ? unchecked(line) : line);
+		}
+
+		const raw = lines[i].trimStart();
+
+		return '\t'.repeat(levels.get(i) ?? 0) + (clear ? unchecked(raw) : raw);
 	});
 };
 
 /**
- * Новый блок цепочки повтора: 📅 по расчёту, та же строка 🔁, то же тело со
- * снятыми чекбоксами. Без ✅ - выполнение предыдущего к нему не относится.
+ * Новый блок цепочки повтора: 📅 по расчёту, тот же 🔁, то же тело со снятыми
+ * чекбоксами. Без ✅ - выполнение предыдущего к нему не относится.
  */
 export const repeatBlockLines = (
 	lines: string[],
 	block: ParsedBlock,
 	date: string
-): string[] => {
-	const params = [paramLine('date', date)];
-	const repeat = block.params.repeat;
-	if (repeat) params.push(paramLine('repeat', repeat.value));
-
-	return [...params, ...copiedBody(lines, block, true)];
-};
+): string[] => copiedBlock(lines, block, { date, repeat: block.params.repeat?.value }, true);
 
 /**
  * Блок отдельного дня череды - того, который отметили наперёд.
@@ -856,7 +993,7 @@ export const occurrenceBlockLines = (
 	block: ParsedBlock,
 	date: string,
 	keepMarks = false
-): string[] => [paramLine('date', date), ...copiedBody(lines, block, !keepMarks)];
+): string[] => copiedBlock(lines, block, { date }, !keepMarks);
 
 /**
  * Блок перенесённого экземпляра: 📅 - день череды, с которого он уехал, ↔️ - день
@@ -872,17 +1009,17 @@ export const movedBlockLines = (
 	origin: string,
 	date: string,
 	keepMarks = false
-): string[] => [
-	paramLine('date', origin),
-	paramLine('move', date),
-	...copiedBody(lines, block, !keepMarks),
-];
+): string[] => copiedBlock(lines, block, { date: origin, move: date }, !keepMarks);
 
-/** Снять галочки в теле блока - правками, не переписывая его целиком. */
-export const clearChecksEdits = (lines: string[], block: ParsedBlock): Edit[] =>
+/**
+ * Снять галочки подзадач - правками, не переписывая блок целиком. Галочка самой
+ * задачи стоит в строке с параметрами и снимается вместе с ними, одной правкой
+ * (`taskLineEdit` и `unchecked`).
+ */
+export const clearSubtasksEdits = (lines: string[], block: ParsedBlock): Edit[] =>
 	block.body
-		.filter((i) => isChecked(lines[i]))
-		.map((i) => ({ at: i, remove: 1, insert: [lines[i].replace(CHECKBOX_LINE, '$1 $3')] }));
+		.filter((i) => i !== block.start && isChecked(lines[i]))
+		.map((i) => ({ at: i, remove: 1, insert: [unchecked(lines[i])] }));
 
 /**
  * Место для **выполненного** блока - в конец, за последним.
@@ -947,9 +1084,9 @@ export const allChecked = (lines: string[], block: ParsedBlock): boolean => {
  */
 export const monthFileName = (date: string): string => date.slice(0, 7);
 
-/** Блок новой задачи: 📅 выбранного дня и один снятый чекбокс. */
+/** Блок новой задачи: одна строка - снятый чекбокс с текстом и 📅 выбранного дня. */
 const newTaskLines = (date: string, text: string): string[] =>
-	[paramLine('date', date), `\t- [ ] ${text}`];
+	[withParam(`- [ ] ${text}`, 'date', date)];
 
 /**
  * Текст нового месячного файла с одной задачей.

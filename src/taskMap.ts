@@ -17,7 +17,7 @@ import {
 	movedBlockLines,
 	normalizeDate,
 	occurrenceBlockLines,
-	clearChecksEdits,
+	clearSubtasksEdits,
 	ParamName,
 	ParsedBlock,
 	parseBlocks,
@@ -29,8 +29,12 @@ import {
 	setParamEdit,
 	showDate,
 	Task,
+	taskLineEdit,
 	taskVaultPath,
 	toggleCheckboxEdit,
+	unchecked,
+	withParam,
+	withoutParam,
 } from './taskFormat';
 
 /**
@@ -151,8 +155,8 @@ export class TaskMap {
 	}
 
 	/**
-	 * Где блок задачи стоит в файле сейчас: от первой строки параметров до
-	 * последней строки тела. Нужно для подсветки при переходе в файл.
+	 * Где блок задачи стоит в файле сейчас: от строки задачи до последней строки
+	 * тела. Нужно для подсветки при переходе в файл.
 	 *
 	 * Файл читается заново: номеров строк в карте нет, тело там уже без отступов.
 	 * Нет файла или блока - null, и переход откроет файл без подсветки.
@@ -439,20 +443,26 @@ export class TaskMap {
 			if (checked === previous.checked) continue;
 
 			if (!checked) {
-				const remove = removeParamEdit(block, 'done');
+				const remove = removeParamEdit(lines, block, 'done');
 				if (remove) edits.push(remove);
 				continue;
 			}
 
-			edits.push(setParamEdit(block, 'done', today));
-
-			// Повтора нет - задача просто закрылась.
 			const repeat = parseRepeat(block.params.repeat?.value);
 			const base = blockDate(block);
 			// Дни, у которых уже есть свой блок этой цепочки: череда их перескакивает.
 			const next = repeat && base
 				? nextFreeDate(base, repeat, takenDays(lines, blocks, blockChain(lines, block)))
 				: null;
+
+			// ✅ и снятие 🔁 - одна правка: оба стоят в строке задачи.
+			edits.push(taskLineEdit(lines, block, (line) => {
+				const done = withParam(line, 'done', today);
+
+				return next ? withoutParam(done, 'repeat') : done;
+			}));
+
+			// Повтора нет - задача просто закрылась.
 			if (!next) continue;
 
 			// Новый блок встаёт непосредственно над закрытым, 🔁 уходит из него: в
@@ -465,9 +475,6 @@ export class TaskMap {
 				remove: 0,
 				insert: repeatBlockLines(lines, block, next),
 			});
-
-			const remove = removeParamEdit(block, 'repeat');
-			if (remove) edits.push(remove);
 		}
 
 		return edits;
@@ -585,7 +592,7 @@ export class TaskMap {
 		const day = parseBlocks(marked)[0];
 
 		return day && allChecked(marked, day)
-			? applyEdits(marked, [setParamEdit(day, 'done', moment().format(DATE_FORMAT))])
+			? applyEdits(marked, [setParamEdit(marked, day, 'done', moment().format(DATE_FORMAT))])
 			: marked;
 	}
 
@@ -633,7 +640,7 @@ export class TaskMap {
 
 				const name: ParamName = block.params.move ? 'move' : 'date';
 
-				return applyEdits(lines, [setParamEdit(block, name, date)]).join('\n');
+				return applyEdits(lines, [setParamEdit(lines, block, name, date)]).join('\n');
 			}
 
 			const taken = takenDays(lines, blocks, blockChain(lines, block));
@@ -656,11 +663,11 @@ export class TaskMap {
 				const next = nextFreeDate(own, repeat, taken);
 
 				if (next) {
-					edits.push(setParamEdit(block, 'date', next));
-					// ↔️ уехало вместе с экземпляром: у цепочки снова свой день.
-					const drop = removeParamEdit(block, 'move');
-					if (drop) edits.push(drop);
-					edits.push(...clearChecksEdits(lines, block));
+					// Новая 📅, без ↔️ - оно уехало вместе с экземпляром, у цепочки снова
+					// свой день, - и чистое тело. Строка задачи - одной правкой.
+					edits.push(taskLineEdit(lines, block, (line) =>
+						unchecked(withoutParam(withParam(line, 'date', next), 'move'))));
+					edits.push(...clearSubtasksEdits(lines, block));
 				}
 			}
 
@@ -713,7 +720,9 @@ export class TaskMap {
 	 * заметку, а дата и текст в карте и так берутся из содержимого блока.
 	 */
 	async createTask(date: string, text: string): Promise<string | null> {
-		const value = text.trim();
+		// Строка задачи в файле одна: переносы из поля (вставили текст в несколько
+		// строк) становятся пробелами, иначе хвост задачи ушёл бы в чужой абзац.
+		const value = text.replace(/\s*[\r\n]+\s*/g, ' ').trim();
 		if (!value || !normalizeDate(date)) return null;
 
 		const { vault } = this.plugin.app;

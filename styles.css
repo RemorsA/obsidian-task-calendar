@@ -144,14 +144,23 @@
 		align-items: center;
 		margin-top: 10px;
 
+		/*
+		 * Высоту под текст ставит fitCreateInput. Одна строка - 40px: 20px строки,
+		 * поля по 9px и рамка. Выше max-height поле не растёт и прокручивается.
+		 */
 		.task__calendar-create-input {
 			flex: 1;
 			min-width: 0;
-			height: 40px;
+			box-sizing: border-box;
+			min-height: 40px;
+			max-height: 200px;
+			resize: none;
+			overflow-y: auto;
+			line-height: 20px;
 			border-radius: 20px;
 			border: 1px solid var(--color-base-30);
 			background: var(--color-base-00);
-			padding: 0 15px;
+			padding: 9px 15px;
 		}
 
 		.task__calendar-create-button {
@@ -183,31 +192,6 @@
 			margin-top: 10px;
 			position: relative;
 			min-height: 40px;
-
-			/*
-			 * 🔁 повторяющейся задачи - левый верхний угол: правый уже занят
-			 * датой (right: 40px) и ссылкой (right: 0), а тело отбивает сверху
-			 * 40px как раз под эти элементы. Размер и размер иконки - как у
-			 * кнопок в том же углу.
-			 */
-			.tasks__item-repeat {
-				position: absolute;
-				top: 0;
-				right: 80px;
-				z-index: 1;
-				display: flex;
-				align-items: center;
-				justify-content: center;
-				padding: 5px;
-				height: 40px;
-				font-size: 20px;
-				line-height: 1;
-
-				svg {
-					height: 20px;
-					color: yellow;
-				}
-			}
 
 			.tasks__item-link-button {
 				position: absolute;
@@ -257,9 +241,17 @@
 				}
 			}
 
+			/*
+			 * Повторяющаяся задача - жёлтая рамка. Правило стоит выше просроченной:
+			 * у повтора, который уже просрочен, рамка остаётся красной - долг важнее.
+			 */
+			&.--is-repeat {
+				border-color: var(--color-yellow);
+			}
+
 			/* Просроченная отличается только рамкой: подписи дня на карточке нет. */
 			&.--is-overdue {
-				border-color: color-mix(in srgb, var(--color-red), transparent 60%);
+				border-color: var(--color-red);
 			}
 
 			/*

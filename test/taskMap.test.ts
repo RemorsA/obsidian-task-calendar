@@ -97,7 +97,7 @@ describe('карта задач', () => {
 	describe('автоматика чекбокса', () => {
 		it('не все отмечены -> все отмечены: ставит ✅ сегодня', async () => {
 			await setup({
-				files: { 'note.md': taskFileText({ date: '2026-08-13', body: ['- [ ] Раз', '- [ ] Два'] }) },
+				files: { 'note.md': taskFileText({ date: '2026-08-13', body: ['- [ ] Раз', '\t- [ ] Два'] }) },
 			});
 
 			await map.toggleCheckbox('/note.md#0', 0);
@@ -107,13 +107,22 @@ describe('карта задач', () => {
 
 			expect(double.vault.contentOf('note.md')).toBe([
 				'',
-				'- 📅 2026-08-13',
-				`- ✅ ${TODAY}`,
-				'\t- [x] Раз',
+				`- [x] Раз 📅 2026-08-13 ✅ ${TODAY}`,
 				'\t- [x] Два',
 				'',
 			].join('\n'));
 			expect(map.all()[0].done).toBe(TODAY);
+		});
+
+		it('отмечена строка задачи, подзадача нет - задача не выполнена', async () => {
+			await setup({
+				files: { 'note.md': taskFileText({ date: '2026-08-13', body: ['- [ ] Раз', '\t- [ ] Два'] }) },
+			});
+
+			await map.toggleCheckbox('/note.md#0', 0);
+
+			expect(double.vault.contentOf('note.md')).not.toContain('✅');
+			expect(map.all()[0].done).toBeNull();
 		});
 
 		it('все отмечены -> не все: убирает ✅', async () => {
@@ -122,7 +131,7 @@ describe('карта задач', () => {
 					'note.md': taskFileText({
 						date: '2026-08-13',
 						done: '2026-08-13',
-						body: ['- [x] Раз', '- [x] Два'],
+						body: ['- [x] Раз', '\t- [x] Два'],
 					}),
 				},
 			});
@@ -148,12 +157,8 @@ describe('карта задач', () => {
 
 			expect(double.vault.contentOf('note.md')).toBe([
 				'',
-				'- 📅 2026-08-14',
-				'- 🔁 Каждый день',
-				'\t- [ ] Купить молоко',
-				'- 📅 2026-08-13',
-				`- ✅ ${TODAY}`,
-				'\t- [x] Купить молоко',
+				'- [ ] Купить молоко 📅 2026-08-14 🔁 Каждый день',
+				`- [x] Купить молоко 📅 2026-08-13 ✅ ${TODAY}`,
 				'',
 			].join('\n'));
 		});
@@ -170,7 +175,7 @@ describe('карта задач', () => {
 
 			await map.toggleCheckbox('/note.md#0', 0);
 
-			expect(double.vault.contentOf('note.md')).toContain('- 📅 2026-09-05');
+			expect(double.vault.contentOf('note.md')).toContain('📅 2026-09-05');
 		});
 
 		it('задача без 🔁 просто закрывается, новый блок не появляется', async () => {
@@ -198,7 +203,7 @@ describe('карта задач', () => {
 
 			await map.toggleCheckbox('/note.md#0', 0);
 
-			expect(double.vault.contentOf('note.md')).toContain(`- ✅ ${TODAY}`);
+			expect(double.vault.contentOf('note.md')).toContain(`✅ ${TODAY}`);
 			expect(map.all()).toHaveLength(1);
 		});
 
@@ -217,8 +222,8 @@ describe('карта задач', () => {
 
 			const content = double.vault.contentOf('note.md') ?? '';
 
-			expect(content).toContain('- 📅 2026-08-14');
-			expect(content).toContain(`- ✅ ${TODAY}`);
+			expect(content).toContain('📅 2026-08-14');
+			expect(content).toContain(`✅ ${TODAY}`);
 		});
 
 		it('своя же запись нового круга автоматики не запускает', async () => {
@@ -272,7 +277,7 @@ describe('карта задач', () => {
 				taskFileText({
 					date: '2026-08-13',
 					done: '2026-08-13',
-					body: ['- [x] Дело', '- [ ] Ещё'],
+					body: ['- [x] Дело', '\t- [ ] Ещё'],
 				})
 			);
 			await settle();
@@ -297,7 +302,7 @@ describe('карта задач', () => {
 				taskFileText({
 					date: '2026-08-13',
 					done: '2026-08-13',
-					body: ['- [x] Дело', '- [x] Ещё'],
+					body: ['- [x] Дело', '\t- [x] Ещё'],
 				})
 			);
 			await settle();
@@ -313,7 +318,7 @@ describe('карта задач', () => {
 
 			await double.vault.modify(
 				fileOf('note.md'),
-				taskFileText({ date: '2026-08-13', body: ['- [ ] Дело', '- [ ] Ещё'] })
+				taskFileText({ date: '2026-08-13', body: ['- [ ] Дело', '\t- [ ] Ещё'] })
 			);
 			await settle();
 
@@ -412,6 +417,12 @@ describe('карта задач', () => {
 		/** Блок, который сейчас ведёт цепочку. */
 		const chain = () => map.all().find((task) => task.repeat !== null);
 
+		/** 📅 строк задач файла сверху вниз - порядок блоков в файле. */
+		const datesInFile = (path: string): string[] => (double.vault.contentOf(path) ?? '')
+			.split('\n')
+			.map((line) => line.match(/^- .*📅 (\S+)/u)?.[1])
+			.filter((date): date is string => date !== undefined);
+
 		it('заводит блок этого дня и закрывает только его', async () => {
 			await setup(weekend());
 
@@ -419,12 +430,8 @@ describe('карта задач', () => {
 
 			expect(double.vault.contentOf('note.md')).toBe([
 				'',
-				'- 📅 2026-08-22',
-				'- 🔁 Каждую неделю в Субботу, Воскресенье',
-				'\t- [ ] Дело',
-				'- 📅 2026-08-29',
-				`- ✅ ${TODAY}`,
-				'\t- [x] Дело',
+				'- [ ] Дело 📅 2026-08-22 🔁 Каждую неделю в Субботу, Воскресенье',
+				`- [x] Дело 📅 2026-08-29 ✅ ${TODAY}`,
 				'',
 			].join('\n'));
 		});
@@ -458,7 +465,7 @@ describe('карта задач', () => {
 					'note.md': taskFileText({
 						date: '2026-08-22',
 						repeat: 'Каждый день',
-						body: ['- [x] Раз', '- [ ] Два'],
+						body: ['- [x] Раз', '\t- [ ] Два'],
 					}),
 				},
 			});
@@ -468,7 +475,7 @@ describe('карта задач', () => {
 			const day = map.all().find((task) => task.date === '2026-08-29');
 
 			// Отмечена только та подзадача, по которой кликнули.
-			expect(day?.body).toBe('- [ ] Раз\n- [x] Два');
+			expect(day?.body).toBe('- [ ] Раз\n\t- [x] Два');
 			expect(day?.done).toBeNull();
 		});
 
@@ -479,10 +486,7 @@ describe('карта задач', () => {
 			await map.toggleCheckbox(chain()!.key, 0);
 			await map.toggleCheckbox(chain()!.key, 0);
 
-			const dates = (double.vault.contentOf('note.md') ?? '')
-				.split('\n')
-				.filter((line) => line.startsWith('- 📅'))
-				.map((line) => line.slice('- 📅 '.length));
+			const dates = datesInFile('note.md');
 
 			// Череда осталась наверху, отмеченный наперёд - в хвосте, куда его и
 			// дописали. Ничего не переставлялось.
@@ -507,10 +511,7 @@ describe('карта задач', () => {
 
 			await map.toggleCheckbox(chain()!.key, 0);
 
-			const dates = (double.vault.contentOf('note.md') ?? '')
-				.split('\n')
-				.filter((line) => line.startsWith('- 📅'))
-				.map((line) => line.slice('- 📅 '.length));
+			const dates = datesInFile('note.md');
 
 			// Новый блок встал над закрытым, верх файла не тронут.
 			expect(dates).toEqual(['2026-08-23', '2026-08-29', '2026-09-05', '2026-08-30']);
@@ -536,7 +537,7 @@ describe('карта задач', () => {
 			await map.toggleCheckbox('/note.md#0', 0, '2026-08-22');
 
 			expect(map.all().filter((task) => task.repeat !== null)).toHaveLength(1);
-			expect(double.vault.contentOf('note.md')).toContain('- 📅 2026-08-23');
+			expect(double.vault.contentOf('note.md')).toContain('📅 2026-08-23');
 		});
 
 		it('мусорный день блока не заводит', async () => {
@@ -580,12 +581,8 @@ describe('карта задач', () => {
 			// ↔️ - день показа: точка в календаре переезжает на него.
 			expect(double.vault.contentOf('note.md')).toBe([
 				'',
-				'- 📅 2026-08-29',
-				'- 🔁 Каждую неделю в Субботу',
-				'\t- [ ] Полить фикус',
-				'- 📅 2026-08-22',
-				'- ↔️ 2026-08-25',
-				'\t- [ ] Полить фикус',
+				'- [ ] Полить фикус 📅 2026-08-29 🔁 Каждую неделю в Субботу',
+				'- [ ] Полить фикус 📅 2026-08-22 ↔️ 2026-08-25',
 				'',
 			].join('\n'));
 		});
@@ -641,7 +638,7 @@ describe('карта задач', () => {
 					'note.md': taskFileText({
 						date: '2026-08-22',
 						repeat: 'Каждую неделю в Субботу',
-						body: ['- [x] Раз', '- [ ] Два'],
+						body: ['- [x] Раз', '\t- [ ] Два'],
 					}),
 				},
 			});
@@ -649,8 +646,8 @@ describe('карта задач', () => {
 			await map.moveTask('/note.md#0', '2026-08-25');
 
 			expect(map.all().find((task) => task.move === '2026-08-25')?.body)
-				.toBe('- [x] Раз\n- [ ] Два');
-			expect(chain()?.body).toBe('- [ ] Раз\n- [ ] Два');
+				.toBe('- [x] Раз\n\t- [ ] Два');
+			expect(chain()?.body).toBe('- [ ] Раз\n\t- [ ] Два');
 		});
 
 		it('имя файла при переносе не меняется', async () => {
@@ -697,12 +694,8 @@ describe('карта задач', () => {
 			// Суббота 29-го осталась блоком цепочки, воскресенье уехало своим блоком.
 			expect(double.vault.contentOf('note.md')).toBe([
 				'',
-				'- 📅 2026-08-29',
-				'- 🔁 Каждую неделю в Субботу, Воскресенье',
-				'\t- [ ] Полить фикус',
-				'- 📅 2026-08-30',
-				'- ↔️ 2026-09-03',
-				'\t- [ ] Полить фикус',
+				'- [ ] Полить фикус 📅 2026-08-29 🔁 Каждую неделю в Субботу, Воскресенье',
+				'- [ ] Полить фикус 📅 2026-08-30 ↔️ 2026-09-03',
 				'',
 			].join('\n'));
 		});
@@ -783,7 +776,7 @@ describe('карта задач', () => {
 					'note.md': taskFileText({
 						date: '2026-08-22',
 						repeat: 'Каждую неделю в Субботу, Воскресенье',
-						body: ['- [x] Раз', '- [ ] Два'],
+						body: ['- [x] Раз', '\t- [ ] Два'],
 					}),
 				},
 			});
@@ -792,9 +785,9 @@ describe('карта задач', () => {
 
 			// Отметки принадлежат экземпляру блока - он и остаётся с ними на своём дне.
 			expect(chain()).toMatchObject({ date: '2026-08-22' });
-			expect(chain()?.body).toBe('- [x] Раз\n- [ ] Два');
+			expect(chain()?.body).toBe('- [x] Раз\n\t- [ ] Два');
 			expect(map.all().find((task) => task.move === '2026-08-25')?.body)
-				.toBe('- [ ] Раз\n- [ ] Два');
+				.toBe('- [ ] Раз\n\t- [ ] Два');
 		});
 
 		it('перенос перенесённого на день его показа ничего не пишет', async () => {
@@ -873,7 +866,7 @@ describe('карта задач', () => {
 
 			expect(path).toBe('2026-08.md');
 			expect(double.vault.contentOf(path!)).toBe(
-				'\n- 📅 2026-08-20\n\t- [ ] Купить молоко / творог\n'
+				'\n- [ ] Купить молоко / творог 📅 2026-08-20\n'
 			);
 			expect(map.all()[0]).toMatchObject({ date: '2026-08-20', body: '- [ ] Купить молоко / творог' });
 		});
@@ -888,10 +881,8 @@ describe('карта задач', () => {
 			expect(double.vault.paths()).toEqual(['2026-08.md']);
 			expect(double.vault.contentOf('2026-08.md')).toBe([
 				'',
-				'- 📅 2026-08-20',
-				'\t- [ ] Раз',
-				'- 📅 2026-08-05',
-				'\t- [ ] Два',
+				'- [ ] Раз 📅 2026-08-20',
+				'- [ ] Два 📅 2026-08-05',
 				'',
 			].join('\n'));
 			expect(map.all().map((task) => [task.key, task.date])).toEqual([
@@ -918,14 +909,9 @@ describe('карта задач', () => {
 
 			expect(double.vault.contentOf('Задачи/2026-08.md')).toBe([
 				'',
-				'- 📅 2026-08-14',
-				'- 🔁 Каждый день',
-				'\t- [ ] Полить фикус',
-				`- 📅 ${TODAY}`,
-				`- ✅ ${TODAY}`,
-				'\t- [x] Полить фикус',
-				'- 📅 2026-08-20',
-				'\t- [ ] Дело',
+				'- [ ] Полить фикус 📅 2026-08-14 🔁 Каждый день',
+				`- [x] Полить фикус 📅 ${TODAY} ✅ ${TODAY}`,
+				'- [ ] Дело 📅 2026-08-20',
 				'',
 			].join('\n'));
 			expect(double.vault.calls.process).toBe(1);
@@ -1064,7 +1050,7 @@ describe('карта задач', () => {
 	});
 
 	describe('строки блока для подсветки', () => {
-		it('блок в середине файла - от первого параметра до последней строки тела', async () => {
+		it('блок в середине файла - от строки задачи до последней строки тела', async () => {
 			await setup({
 				files: {
 					'note.md': taskFileText(
@@ -1079,10 +1065,10 @@ describe('карта задач', () => {
 				},
 			});
 
-			// Строка 0 - пустая, первый блок занимает 1-3, второй начинается с 4-й.
+			// Строка 0 - пустая, первый блок занимает строку 1, второй - 2 и 3.
 			expect(await map.locate('/note.md#1')).toEqual({
-				start: { line: 4, col: 0 },
-				end: { line: 7, col: '\t\t- [x] Подзадача'.length },
+				start: { line: 2, col: 0 },
+				end: { line: 3, col: '\t- [x] Подзадача'.length },
 			});
 		});
 
@@ -1091,10 +1077,10 @@ describe('карта задач', () => {
 				files: {
 					'note.md': [
 						'',
-						'- 📅 2026-08-13',
-						'\tпросто текст, чекбоксов нет',
-						'- 📅 2026-08-14',
-						'\t- [ ] Задача',
+						'- [ ] Черновик 🔁 Каждый день',
+						'\tпросто текст, даты нет',
+						'- [ ] Задача 📅 2026-08-14',
+						'\t- [ ] Подзадача',
 						'',
 					].join('\n'),
 				},
@@ -1105,7 +1091,7 @@ describe('карта задач', () => {
 			expect(task.key).toBe('/note.md#1');
 			expect(await map.locate(task.key)).toEqual({
 				start: { line: 3, col: 0 },
-				end: { line: 4, col: '\t- [ ] Задача'.length },
+				end: { line: 4, col: '\t- [ ] Подзадача'.length },
 			});
 		});
 
@@ -1115,8 +1101,8 @@ describe('карта задач', () => {
 					'note.md': [
 						'# Тромбофилия',
 						'',
-						'- 📅 2026-10-19',
-						'\t- [ ] Записаться на сдачу',
+						'- [ ] Записаться на сдачу 📅 2026-10-19',
+						'\t- [ ] Взять направление',
 						'',
 						'# Кожа',
 						'- [ ] Сходить к дерматологу',
@@ -1128,7 +1114,7 @@ describe('карта задач', () => {
 
 			expect(await map.locate('/note.md#0')).toEqual({
 				start: { line: 2, col: 0 },
-				end: { line: 3, col: '\t- [ ] Записаться на сдачу'.length },
+				end: { line: 3, col: '\t- [ ] Взять направление'.length },
 			});
 		});
 
