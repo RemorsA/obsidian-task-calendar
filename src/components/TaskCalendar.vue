@@ -109,8 +109,9 @@
 
 		<!--
 			Список идёт одним порядком, без разделителей: сначала просроченные,
-			потом задачи выбранного дня, в конце выполненные. Группы различает вид
-			самой карточки - рамка у просроченной, перечёркнутый текст у выполненной.
+			потом обычные задачи выбранного дня, за ними повторяющиеся, в конце
+			выполненные. Группы различает вид самой карточки - рамка у просроченной,
+			перечёркнутый текст у выполненной.
 			Внутри невыполненных групп - новое сверху, выполненные - по наименованию.
 			Повторяющаяся задача отмечена жёлтой рамкой в любой группе.
 		-->
@@ -397,13 +398,26 @@ const projectedTasks = computed<Task[]>(() => {
 		.sort(compareByNewness);
 });
 
+/**
+ * Задачи выбранного дня: сначала обычные, за ними повторяющиеся - и свой блок
+ * цепочки, и расчётный день череды. Внутри каждой части новое сверху.
+ */
+const dayTasks = computed<Task[]>(() => {
+	const day = [...selectedTasks.value, ...projectedTasks.value].sort(compareByNewness);
+
+	return [
+		...day.filter((task) => task.repeat === null),
+		...day.filter((task) => task.repeat !== null),
+	];
+});
+
 const cards = computed<TaskCard[]>(() => [
 	...overdueTasks.value.map((task) => ({
 		task,
 		modifier: '--is-overdue',
 		date: showDate(task),
 	})),
-	...[...selectedTasks.value, ...projectedTasks.value].sort(compareByNewness).map((task) => ({
+	...dayTasks.value.map((task) => ({
 		task,
 		modifier: '',
 		date: selectedDate.value,

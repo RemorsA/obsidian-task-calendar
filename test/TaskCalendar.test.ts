@@ -276,6 +276,45 @@ describe('список задач', () => {
 		expect(itemTexts(wrapper)).toEqual(['Долг', 'Дело', 'Готово']);
 	});
 
+	it('в дне сначала обычные задачи, потом повторяющиеся - даже если повтор новее', async () => {
+		const { wrapper } = await mountCalendar({
+			files: {
+				'2026-08.md': taskFileText(
+					{ date: TODAY, body: ['- [ ] Обычная'] },
+					{ date: TODAY, repeat: 'Каждый день', body: ['- [ ] Повтор'] },
+				),
+			},
+		});
+
+		expect(itemTexts(wrapper)).toEqual(['Обычная', 'Повтор']);
+	});
+
+	it('порядок: просроченные, обычные, повторяющиеся с расчётными днями, закрытые', async () => {
+		const { wrapper } = await mountCalendar({
+			files: {
+				'2026-08.md': taskFileText(
+					{ date: '2026-08-15', body: ['- [ ] Обычная старая'] },
+					{ date: TODAY, repeat: 'Каждый день', body: ['- [ ] Ежедневная'] },
+					{ date: '2026-08-15', body: ['- [ ] Обычная новая'] },
+					{ date: '2026-08-15', done: TODAY, body: ['- [x] Готово'] },
+					{ date: '2026-08-10', body: ['- [ ] Долг'] },
+				),
+			},
+		});
+
+		await clickDay(wrapper, '2026-08-15');
+
+		expect(itemKinds(wrapper)).toEqual(['просроченная', 'дня', 'дня', 'дня', 'выполненная']);
+		// Внутри обычных - новое сверху; «Ежедневная» на 15-е - расчётный день череды.
+		expect(itemTexts(wrapper)).toEqual([
+			'Долг',
+			'Обычная новая',
+			'Обычная старая',
+			'Ежедневная',
+			'Готово',
+		]);
+	});
+
 	it('просроченные видны в списке любого выбранного дня', async () => {
 		const { wrapper } = await mountCalendar({
 			files: { 'долг.md': taskFileText({ date: '2026-08-10', body: ['- [ ] Долг'] }) },
