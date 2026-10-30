@@ -13,10 +13,9 @@ import {
 	isOverdue,
 	isValidBlock,
 	blockAppendAt,
-	monthFileName,
+	yearFileName,
 	nextDate,
 	nextFreeDate,
-	movedBlockLines,
 	occurrenceBlockLines,
 	occurrencesInRange,
 	parseBlocks,
@@ -758,10 +757,10 @@ describe('ключ цепочки', () => {
 	});
 });
 
-describe('месячный файл', () => {
-	it('имя - год и месяц даты задачи', () => {
-		expect(monthFileName('2026-08-20')).toBe('2026-08');
-		expect(monthFileName('2027-01-01')).toBe('2027-01');
+describe('файл задач', () => {
+	it('имя - год даты задачи', () => {
+		expect(yearFileName('2026-08-20')).toBe('2026');
+		expect(yearFileName('2027-01-01')).toBe('2027');
 	});
 
 	it('задача дописывается под всеми задачами, лежащие блоки не двигаются', () => {
@@ -954,7 +953,7 @@ describe('правки блока', () => {
 		]);
 	});
 
-	it('блок перенесённого экземпляра: 📅 - день череды, ↔️ - день показа', () => {
+	it('блок перенесённого экземпляра: 📅 новой даты, без ↔️ и 🔁', () => {
 		const { lines, block } = blockOf(taskFileText({
 			date: '2026-08-22',
 			repeat: 'Каждый день',
@@ -962,14 +961,14 @@ describe('правки блока', () => {
 		}));
 
 		// Уехал сам блок - отметки едут с ним: это тот же экземпляр.
-		expect(movedBlockLines(lines, block, '2026-08-22', '2026-08-25', true)).toEqual([
-			'- [x] Дело 📅 2026-08-22 ↔️ 2026-08-25',
+		expect(occurrenceBlockLines(lines, block, '2026-08-25', true)).toEqual([
+			'- [x] Дело 📅 2026-08-25',
 			'\t- [ ] Подпункт',
 		]);
 
 		// Уехал расчётный день череды - тело чистое, отмечать там было нечего.
-		expect(movedBlockLines(lines, block, '2026-08-23', '2026-08-25')).toEqual([
-			'- [ ] Дело 📅 2026-08-23 ↔️ 2026-08-25',
+		expect(occurrenceBlockLines(lines, block, '2026-08-25')).toEqual([
+			'- [ ] Дело 📅 2026-08-25',
 			'\t- [ ] Подпункт',
 		]);
 	});
@@ -1099,6 +1098,19 @@ describe('сортировка и группы', () => {
 
 		expect([august, january, september].sort(compareByNewness).map((item) => item.key))
 			.toEqual(['january', 'september', 'august']);
+	});
+
+	it('по новизне годовой файл новее месячных своего года, но старше следующего года', () => {
+		const list = [
+			task({ key: '2026-08', fileName: '2026-08' }),
+			task({ key: '2027', fileName: '2027' }),
+			task({ key: '2026-12', fileName: '2026-12' }),
+			task({ key: '2026', fileName: '2026' }),
+			task({ key: '2027-01', fileName: '2027-01' }),
+		];
+
+		expect(list.sort(compareByNewness).map((item) => item.key))
+			.toEqual(['2027', '2027-01', '2026', '2026-12', '2026-08']);
 	});
 
 	it('по новизне: одноимённые файлы разных папок не смешиваются', () => {
