@@ -70,19 +70,25 @@
 		<!--
 			Кнопка и Enter создают задачу без перехода в файл: на телефоне переход
 			после каждой задачи мешал бы заводить их подряд.
+
+			Поле - textarea, чтобы длинная задача переносилась и была видна целиком;
+			высота растёт под текст. Перевода строки в задаче не бывает, поэтому Enter
+			по-прежнему создаёт задачу.
 		-->
 		<form
 			class="task__calendar-create"
 			@submit.prevent="handleCreateTask"
 		>
-			<input
+			<textarea
 				ref="taskNameInput"
 				v-model="actionText"
 				class="task__calendar-create-input"
-				type="text"
+				rows="1"
 				enterkeyhint="done"
 				:placeholder="`Новая задача на ${selectedDate}`"
-			>
+				@beforeinput="handleCreateBeforeInput"
+				@input="fitCreateInput"
+			/>
 
 			<button
 				class="task__calendar-default-button task__calendar-create-button"
@@ -106,6 +112,7 @@
 			потом задачи выбранного дня, в конце выполненные. Группы различает вид
 			самой карточки - рамка у просроченной, перечёркнутый текст у выполненной.
 			Внутри невыполненных групп - новое сверху, выполненные - по наименованию.
+			Повторяющаяся задача отмечена жёлтой рамкой в любой группе.
 		-->
 		<div
 			v-else
@@ -114,21 +121,8 @@
 			<div
 				v-for="card in cards"
 				:key="card.task.key"
-				:class="['tasks__item', card.modifier]"
+				:class="['tasks__item', card.modifier, card.task.repeat && '--is-repeat']"
 			>
-				<!--
-					🔁 в левом верхнем углу: задача повторяется. Правый верх уже
-					занят датой и ссылкой, а тело отбивает сверху 40px как раз под эти
-					элементы, поэтому левый угол остаётся свободным.
-				-->
-				<span
-					v-if="card.task.repeat"
-					class="tasks__item-repeat"
-					title="Повторяющаяся задача"
-				>
-					<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 1024 1024"><!-- Icon from Element Plus by Element Plus - https://github.com/element-plus/element-plus-icons/blob/main/packages/svg/package.json --><path fill="currentColor" d="M771.8 794.9A384 384 0 0 1 128 512h64a320 320 0 0 0 555.7 216.4h-93a32 32 0 1 1 0-64h149a32 32 0 0 1 32 32v149a32 32 0 1 1-64 0zM276.3 295.6h93a32 32 0 0 1 0 64H220.2a32 32 0 0 1-32-32v-149a32 32 0 0 1 64 0V229a384 384 0 0 1 644 282.9h-64a320 320 0 0 0-555.8-216.4z"/></svg>
-				</span>
-
 				<!--
 					Дату меняет штатный календарь браузера: у поля type="date" он
 					открывается по showPicker() и сам знает, как выглядеть на телефоне
@@ -465,7 +459,33 @@ const openNote = async (path: string, range: BlockRange | null): Promise<void> =
 };
 
 /** Поле ввода названия новой задачи. */
-const taskNameInput = ref<HTMLInputElement | null>(null);
+const taskNameInput = ref<HTMLTextAreaElement | null>(null);
+
+/**
+ * Высота поля под текст. Сначала сброс: иначе `scrollHeight` не уменьшится, когда
+ * текст стёрли. Рамка в `scrollHeight` не входит и добавляется отдельно; потолок
+ * держит `max-height` в стилях.
+ */
+const fitCreateInput = (): void => {
+	const input = taskNameInput.value;
+	if (!input) return;
+
+	input.style.height = 'auto';
+	input.style.height = `${input.scrollHeight + input.offsetHeight - input.clientHeight}px`;
+};
+
+/**
+ * Enter в поле создаёт задачу, а не переносит строку: строка задачи в файле одна.
+ * Ловится `beforeinput`, а не `keydown`: так срабатывает и кнопка «Готово»
+ * экранной клавиатуры, а Enter, которым IME подтверждает слово, задачу не создаёт.
+ */
+const handleCreateBeforeInput = (event: InputEvent): void => {
+	if (event.isComposing) return;
+	if (event.inputType !== 'insertLineBreak' && event.inputType !== 'insertParagraph') return;
+
+	event.preventDefault();
+	void handleCreateTask();
+};
 
 /**
  * Создать задачу на выбранный день: блок с 📅 и одним снятым чекбоксом в
@@ -478,6 +498,8 @@ const handleCreateTask = async (): Promise<void> => {
 	if (!path) return;
 
 	actionText.value = '';
+	// Поле пустое - снова в одну строку, как задают стили.
+	if (taskNameInput.value) taskNameInput.value.style.height = '';
 };
 
 /**

@@ -28,21 +28,23 @@ export interface TaskBlockFixture {
 	repeat?: string | null;
 	/** ✅ - отметка выполнения. */
 	done?: string | null;
-	/** Строки тела без отступа - таб добавляется сам. */
+	/**
+	 * Тело: первая строка - строка задачи, параметры дописываются к ней сами;
+	 * остальные - подзадачи со своим отступом.
+	 */
 	body?: string[];
 }
 
-/** Строки одного блока задачи в каноническом порядке параметров. */
+/** Строки одного блока задачи: параметры в каноническом порядке в конце строки задачи. */
 export const taskBlockLines = (block: TaskBlockFixture = {}): string[] => {
-	const lines = [`- 📅 ${block.date ?? TODAY}`];
+	const [task, ...subtasks] = block.body ?? ['- [ ] Задача'];
+	const params = [`📅 ${block.date ?? TODAY}`];
 
-	if (block.move) lines.push(`- ↔️ ${block.move}`);
-	if (block.repeat) lines.push(`- 🔁 ${block.repeat}`);
-	if (block.done) lines.push(`- ✅ ${block.done}`);
+	if (block.move) params.push(`↔️ ${block.move}`);
+	if (block.repeat) params.push(`🔁 ${block.repeat}`);
+	if (block.done) params.push(`✅ ${block.done}`);
 
-	for (const line of block.body ?? ['- [ ] Задача']) lines.push(`\t${line}`);
-
-	return lines;
+	return [`${task} ${params.join(' ')}`, ...subtasks];
 };
 
 /**

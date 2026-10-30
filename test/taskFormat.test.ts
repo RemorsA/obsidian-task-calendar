@@ -185,7 +185,7 @@ describe('nextDate - тест-кейсы раздела 11', () => {
 	});
 
 	it('мусорная 📅 базой не становится', () => {
-		const content = ['', '- 📅 завтра', '\t- [ ] Дело', ''].join('\n');
+		const content = ['', '- [ ] Дело 📅 2026-02-30', ''].join('\n');
 
 		expect(blockDate(blockOf(content).block)).toBeNull();
 	});
@@ -302,35 +302,73 @@ describe('разбор блоков', () => {
 		});
 	});
 
-	it('порядок строк параметров при чтении произвольный', () => {
-		const content = [
-			'',
-			'- ✅ 2026-08-21',
-			'- 🔁 Каждый день',
-			'- 📅 2026-08-21',
-			'\t- [x] Купить молоко',
-			'',
-		].join('\n');
+	it('порядок параметров при чтении произвольный', () => {
+		const content = ['', '- [x] Купить молоко ✅ 2026-08-21 🔁 Каждый день 📅 2026-08-21', '']
+			.join('\n');
 
 		expect(readTasks('note.md', content)[0]).toMatchObject({
 			date: '2026-08-21',
 			repeat: 'Каждый день',
 			done: '2026-08-21',
+			body: '- [x] Купить молоко',
 			checked: true,
 		});
 	});
 
-	it('строка ↔️ из старых файлов просто игнорируется', () => {
-		const content = ['', '- 📅 2026-08-21', '- ↔️ 2026-08-25', '\t- [ ] Дело', ''].join('\n');
-		const tasks = readTasks('note.md', content);
+	it('текст за параметром-датой остаётся текстом задачи', () => {
+		const content = ['', '- [ ] Дело 📅 2026-08-21 #работа ✅ 2026-08-21 до обеда', '']
+			.join('\n');
 
-		// Флага перемещения больше нет: строка не параметр, блок от неё не ломается.
-		expect(tasks).toHaveLength(1);
-		expect(tasks[0]).toMatchObject({ date: '2026-08-21', body: '- [ ] Дело' });
+		expect(readTasks('note.md', content)[0]).toMatchObject({
+			date: '2026-08-21',
+			done: '2026-08-21',
+			body: '- [ ] Дело #работа до обеда',
+		});
+	});
+
+	it('🔁 - весь текст до следующего параметра', () => {
+		const content = [
+			'',
+			'- [ ] Полить фикус 🔁 Каждую неделю в Субботу, Воскресенье 📅 2026-08-22',
+			'',
+		].join('\n');
+
+		expect(readTasks('note.md', content)[0]).toMatchObject({
+			date: '2026-08-22',
+			repeat: 'Каждую неделю в Субботу, Воскресенье',
+			body: '- [ ] Полить фикус',
+		});
+	});
+
+	it('🔁 кончается перед тегом: тег остаётся текстом задачи', () => {
+		const content = ['', '- [ ] Полить фикус 📅 2026-08-22 🔁 Каждый день #дом', ''].join('\n');
+		const { lines, block } = blockOf(content);
+
+		expect(readTasks('note.md', content)[0]).toMatchObject({
+			repeat: 'Каждый день',
+			body: '- [ ] Полить фикус #дом',
+		});
+		expect(applyEdits(lines, [setParamEdit(lines, block, 'done', '2026-08-22')])[1])
+			.toBe('- [ ] Полить фикус 📅 2026-08-22 🔁 Каждый день ✅ 2026-08-22 #дом');
+	});
+
+	it('эмодзи, приклеенный к слову, параметром не считается', () => {
+		const content = ['', '- [ ] Дело📅 2026-08-21', ''].join('\n');
+
+		expect(readTasks('note.md', content)).toHaveLength(0);
+	});
+
+	it('повторный параметр - в счёт идёт первый, второй остаётся текстом', () => {
+		const content = ['', '- [ ] Дело 📅 2026-08-21 📅 2026-08-22', ''].join('\n');
+
+		expect(readTasks('note.md', content)[0]).toMatchObject({
+			date: '2026-08-21',
+			body: '- [ ] Дело 📅 2026-08-22',
+		});
 	});
 
 	it('↔️ читается и без селектора U+FE0F', () => {
-		const content = ['', '- 📅 2026-08-21', '- ↔ 2026-08-25', '\t- [ ] Дело', ''].join('\n');
+		const content = ['', '- [ ] Дело 📅 2026-08-21 ↔ 2026-08-25', ''].join('\n');
 
 		expect(readTasks('note.md', content)[0].move).toBe('2026-08-25');
 	});
@@ -358,7 +396,7 @@ describe('разбор блоков', () => {
 	});
 
 	it('эмодзи без значения параметром не считается', () => {
-		const content = ['', '- 📅', '\t- [ ] Дело', ''].join('\n');
+		const content = ['', '- [ ] Дело 📅', ''].join('\n');
 
 		expect(readTasks('note.md', content)).toHaveLength(0);
 	});
@@ -378,21 +416,74 @@ describe('разбор блоков', () => {
 	});
 
 	it('пустые строки границей блока не являются', () => {
-		const content = ['', '- 📅 2026-08-21', '', '- 🔁 Каждый день', '', '\t- [ ] Дело', ''].join('\n');
+		const content = ['', '- [ ] Дело 📅 2026-08-21', '', '\t- [ ] Подпункт', ''].join('\n');
 		const tasks = readTasks('note.md', content);
 
 		expect(tasks).toHaveLength(1);
-		expect(tasks[0].repeat).toBe('Каждый день');
+		expect(tasks[0].body).toBe('- [ ] Дело\n\t- [ ] Подпункт');
 	});
 
-	it('повторный параметр открывает новый блок', () => {
-		const content = ['', '- 📅 2026-08-21', '- 📅 2026-08-22', '\t- [ ] Дело', ''].join('\n');
+	it('строки задач подряд - каждая свой блок', () => {
+		const content = ['', '- [ ] Черновик 🔁 Каждый день', '- [ ] Дело 📅 2026-08-22', ''].join('\n');
 
-		// У первого блока тела нет - он невалиден и в карту не попадает.
+		// У первого блока нет 📅 - он невалиден и в карту не попадает.
 		const tasks = readTasks('note.md', content);
 
 		expect(tasks).toHaveLength(1);
 		expect(tasks[0]).toMatchObject({ blockIndex: 1, date: '2026-08-22' });
+	});
+
+	it('пункт без галочки задачей не бывает - старый формат не подхватывается', () => {
+		const content = [
+			'',
+			'- 📅 2026-08-21',
+			'- 🔁 Каждый день',
+			'\t- [ ] Купить молоко',
+			'- 📅 2026-08-22',
+			'\t- [ ] Полить фикус',
+			'- Просто пункт 📅 2026-08-23',
+			'',
+		].join('\n');
+
+		expect(parseBlocks(content.split('\n'))).toHaveLength(0);
+	});
+
+	it('эмодзи даты со словом, а не датой, - текст задачи, а не параметр', () => {
+		const content = ['', '- [ ] ✅ Проверить отчёт 📅 2026-08-21', ''].join('\n');
+		const { lines, block } = blockOf(content);
+
+		expect(readTasks('note.md', content)[0]).toMatchObject({
+			date: '2026-08-21',
+			done: null,
+			body: '- [ ] ✅ Проверить отчёт',
+		});
+		// Выполнение дописывает свою ✅, текст задачи не трогает.
+		expect(applyEdits(lines, [setParamEdit(lines, block, 'done', '2026-08-22')])[1])
+			.toBe('- [ ] ✅ Проверить отчёт 📅 2026-08-21 ✅ 2026-08-22');
+	});
+
+	it('пункт с отступом - подзадача, даже с эмодзи', () => {
+		const content = ['', '- [ ] Дело 📅 2026-08-21', '\t- [ ] Подпункт 📅 2026-08-25', '']
+			.join('\n');
+		const tasks = readTasks('note.md', content);
+
+		expect(tasks).toHaveLength(1);
+		expect(tasks[0]).toMatchObject({
+			date: '2026-08-21',
+			body: '- [ ] Дело\n\t- [ ] Подпункт 📅 2026-08-25',
+		});
+	});
+
+	it('строка задачи с отступом задачей не считается', () => {
+		const content = ['', '- Проект', '\t- [ ] Дело 📅 2026-08-21', ''].join('\n');
+
+		expect(readTasks('note.md', content)).toHaveLength(0);
+	});
+
+	it('не пункт списка задачей не бывает: в абзаце эмодзи ничего не значат', () => {
+		const content = ['', 'Встреча 📅 2026-08-21', ''].join('\n');
+
+		expect(parseBlocks(content.split('\n'))).toHaveLength(0);
 	});
 
 	it('блок без чекбоксов не показывается', () => {
@@ -402,7 +493,7 @@ describe('разбор блоков', () => {
 	});
 
 	it('блок без 📅 не показывается', () => {
-		const content = ['', '- 🔁 Каждый день', '\t- [ ] Дело', ''].join('\n');
+		const content = ['', '- [ ] Дело 🔁 Каждый день', ''].join('\n');
 
 		expect(readTasks('note.md', content)).toHaveLength(0);
 	});
@@ -422,76 +513,137 @@ describe('разбор блоков', () => {
 	it('в тело идут только списки, всё остальное выбрасывается', () => {
 		const content = [
 			'',
-			'- 📅 2026-08-21',
+			'- [ ] Дело 📅 2026-08-21',
 			'\t# Заголовок',
 			'\tАбзац',
 			'\t> Цитата',
-			'\t- [ ] Дело',
-			'\t\t- [ ] Подпункт',
+			'\t- [ ] Подпункт',
+			'\t\t- [ ] Подподпункт',
 			'\t1. Нумерованный',
 			'',
 		].join('\n');
 
 		expect(readTasks('note.md', content)[0].body).toBe(
-			'- [ ] Дело\n\t- [ ] Подпункт\n1. Нумерованный'
+			'- [ ] Дело\n\t- [ ] Подпункт\n\t\t- [ ] Подподпункт\n\t1. Нумерованный'
 		);
 	});
 
 	it('строки внутри блока кода списками не считаются', () => {
 		const content = [
 			'',
-			'- 📅 2026-08-21',
-			'\t- [ ] Дело',
+			'- [x] Дело 📅 2026-08-21',
 			'\t```',
 			'\t- [ ] Не чекбокс',
 			'\t```',
-			'\t- [ ] Второе',
+			'\t- [x] Второе',
 			'',
 		].join('\n');
 
 		const [task] = readTasks('note.md', content);
 
-		expect(task.body).toBe('- [ ] Дело\n- [ ] Второе');
-		expect(task.checked).toBe(false);
+		expect(task.body).toBe('- [x] Дело\n\t- [x] Второе');
+		expect(task.checked).toBe(true);
+	});
+
+	it('строки задачи внутри блока кода задачами не считаются', () => {
+		const content = [
+			'',
+			'- [x] Настоящая 📅 2026-10-29 ✅ 2026-10-30',
+			'\t- [x] Подзадача',
+			'',
+			'```',
+			'- [ ] Task 📅 2026-10-28',
+			'- [ ] Task 2 📅 2026-10-29 🔁 Каждый день',
+			'- [x] Task 3 📅 2026-10-28 ↔️ 2026-10-29 ✅ 2026-10-29',
+			'\t- [x] dwadwadaw',
+			'```',
+			'',
+			'^6a0de6',
+			'',
+			'- [x] После кода 📅 2026-10-28 ✅ 2026-10-28',
+			'',
+		].join('\n');
+
+		const tasks = readTasks('note.md', content);
+
+		expect(tasks.map((task) => task.sortKey)).toEqual(['Настоящая', 'После кода']);
+		// Блок кода нулевого уровня закрывает задачу над ним: его строки не её тело.
+		expect(tasks[0].body).toBe('- [x] Настоящая\n\t- [x] Подзадача');
+	});
+
+	it('блок кода с тильдами - то же самое', () => {
+		const content = ['', '~~~', '- [ ] Пример 📅 2026-10-28', '~~~', ''].join('\n');
+
+		expect(readTasks('note.md', content)).toHaveLength(0);
+	});
+
+	it('незакрытый блок кода - до конца файла код, задач в нём нет', () => {
+		const content = [
+			'',
+			'- [ ] До кода 📅 2026-10-28',
+			'```',
+			'- [ ] В коде 📅 2026-10-29',
+			'',
+		].join('\n');
+
+		expect(readTasks('note.md', content).map((task) => task.sortKey)).toEqual(['До кода']);
+	});
+
+	it('новая задача не дописывается внутрь блока кода в конце файла', () => {
+		const content = [
+			'',
+			'- [ ] Настоящая 📅 2026-10-28',
+			'```',
+			'- [ ] Пример 📅 2026-10-28',
+			'```',
+			'',
+		].join('\n');
+
+		const next = appendTaskBlock(content, '2026-10-30', 'Новая');
+
+		expect(next).toBe([
+			'',
+			'- [ ] Настоящая 📅 2026-10-28',
+			'- [ ] Новая 📅 2026-10-30',
+			'```',
+			'- [ ] Пример 📅 2026-10-28',
+			'```',
+			'',
+		].join('\n'));
 	});
 
 	it('отступы читаются табами, двумя и четырьмя пробелами', () => {
 		const content = [
 			'',
-			'- 📅 2026-08-21',
-			'    - [ ] Дело',
-			'        - [ ] Подпункт',
+			'- [ ] Дело 📅 2026-08-21',
+			'    - [ ] Подпункт',
+			'        - [ ] Подподпункт',
 			'',
 		].join('\n');
 
-		expect(readTasks('note.md', content)[0].body).toBe('- [ ] Дело\n\t- [ ] Подпункт');
+		expect(readTasks('note.md', content)[0].body)
+			.toBe('- [ ] Дело\n\t- [ ] Подпункт\n\t\t- [ ] Подподпункт');
 	});
 
 	it('строка нулевого уровня без эмодзи в тело не идёт и блок закрывает', () => {
-		const content = ['', '- 📅 2026-08-21', '\t- [ ] Дело', 'Просто текст', '\t- [ ] Чужое', '']
+		const content = ['', '- [ ] Дело 📅 2026-08-21', 'Просто текст', '\t- [ ] Чужое', '']
 			.join('\n');
 
 		expect(readTasks('note.md', content)[0].body).toBe('- [ ] Дело');
 	});
 
-	it('текст между 📅 и телом закрывает блок: тело уже не его', () => {
-		const content = ['', '- 📅 2026-08-21', 'Просто текст', '\t- [ ] Дело', ''].join('\n');
-
-		expect(readTasks('note.md', content)).toHaveLength(0);
-	});
-
 	it('пустая строка блок не закрывает', () => {
-		const content = ['', '- 📅 2026-08-21', '\t- [ ] Раз', '', '\t- [ ] Два', ''].join('\n');
+		const content = ['', '- [ ] Дело 📅 2026-08-21', '\t- [ ] Раз', '', '\t- [ ] Два', '']
+			.join('\n');
 
-		expect(readTasks('note.md', content)[0].body).toBe('- [ ] Раз\n- [ ] Два');
+		expect(readTasks('note.md', content)[0].body).toBe('- [ ] Дело\n\t- [ ] Раз\n\t- [ ] Два');
 	});
 
 	it('заголовок и чужой пункт списка закрывают блок: их подпункты в тело не идут', () => {
 		const content = [
 			'# Тромбофилия',
 			'',
-			'- 📅 2026-10-19',
-			'\t- [ ] Записаться на сдачу',
+			'- [ ] Записаться на сдачу 📅 2026-10-19',
 			'',
 			'# Кожа',
 			'',
@@ -508,15 +660,15 @@ describe('разбор блоков', () => {
 	});
 
 	it('checked - все чекбоксы блока, любой знак кроме x считается снятым', () => {
-		const checked = taskFileText({ body: ['- [x] Раз', '- [X] Два'] });
-		const partial = taskFileText({ body: ['- [x] Раз', '- [/] Два'] });
+		const checked = taskFileText({ body: ['- [x] Раз', '\t- [X] Два'] });
+		const partial = taskFileText({ body: ['- [x] Раз', '\t- [/] Два'] });
 
 		expect(readTasks('note.md', checked)[0].checked).toBe(true);
 		expect(readTasks('note.md', partial)[0].checked).toBe(false);
 	});
 
 	it('мусор вместо даты датой не считается', () => {
-		const content = ['', '- 📅 21.08.2026', '\t- [ ] Дело', ''].join('\n');
+		const content = ['', '- [ ] Дело 📅 21.08.2026', ''].join('\n');
 
 		expect(readTasks('note.md', content)).toHaveLength(0);
 	});
@@ -620,14 +772,9 @@ describe('месячный файл', () => {
 
 		expect(appendTaskBlock(content, '2026-08-20', 'Два')).toBe([
 			'',
-			'- 📅 2026-08-14',
-			'- 🔁 Каждый день',
-			'\t- [ ] Раз',
-			'- 📅 2026-08-13',
-			'- ✅ 2026-08-13',
-			'\t- [x] Раз',
-			'- 📅 2026-08-20',
-			'\t- [ ] Два',
+			'- [ ] Раз 📅 2026-08-14 🔁 Каждый день',
+			'- [x] Раз 📅 2026-08-13 ✅ 2026-08-13',
+			'- [ ] Два 📅 2026-08-20',
 			'',
 		].join('\n'));
 	});
@@ -643,10 +790,10 @@ describe('месячный файл', () => {
 	});
 
 	it('текст после последней задачи остаётся ниже новой', () => {
-		const content = ['', '- 📅 2026-08-13', '\t- [ ] Раз', 'Заметка внизу', ''].join('\n');
+		const content = ['', '- [ ] Раз 📅 2026-08-13', '\t- [ ] Шаг', 'Заметка внизу', ''].join('\n');
 
 		expect(appendTaskBlock(content, '2026-08-20', 'Два')).toBe(
-			['', '- 📅 2026-08-13', '\t- [ ] Раз', '- 📅 2026-08-20', '\t- [ ] Два', 'Заметка внизу', '']
+			['', '- [ ] Раз 📅 2026-08-13', '\t- [ ] Шаг', '- [ ] Два 📅 2026-08-20', 'Заметка внизу', '']
 				.join('\n')
 		);
 	});
@@ -658,26 +805,33 @@ describe('месячный файл', () => {
 
 	it('в файл без задач блок дописывается в конец, через пустую строку', () => {
 		expect(appendTaskBlock('# Август\nПросто текст\n\n', '2026-08-20', 'Дело')).toBe(
-			'# Август\nПросто текст\n\n- 📅 2026-08-20\n\t- [ ] Дело\n\n'
+			'# Август\nПросто текст\n\n- [ ] Дело 📅 2026-08-20\n\n'
 		);
 	});
 });
 
 describe('новый файл задачи', () => {
-	it('пустая строка в начале и в конце, 📅 и один снятый чекбокс', () => {
+	it('пустая строка в начале и в конце, одна строка: снятый чекбокс и 📅', () => {
 		expect(buildTaskFile('2026-08-20', 'Купить молоко')).toBe(
-			'\n- 📅 2026-08-20\n\t- [ ] Купить молоко\n'
+			'\n- [ ] Купить молоко 📅 2026-08-20\n'
 		);
 	});
 });
 
 describe('правки блока', () => {
 	it('переключает чекбокс по номеру и не трогает остальное', () => {
-		const content = taskFileText({ body: ['- [ ] Раз', '- [ ] Два'] });
+		const content = taskFileText({ body: ['- [ ] Раз', '\t- [ ] Два'] });
 		const next = toggleCheckbox(content, 0, 1);
 
 		expect(next).toContain('- [ ] Раз');
 		expect(next).toContain('- [x] Два');
+	});
+
+	it('чекбокс строки задачи - первый, параметры при отметке не меняются', () => {
+		const content = taskFileText({ date: '2026-08-21', repeat: 'Каждый день' });
+
+		expect(toggleCheckbox(content, 0, 0))
+			.toBe(['', '- [x] Задача 📅 2026-08-21 🔁 Каждый день', ''].join('\n'));
 	});
 
 	it('снимает уже отмеченный чекбокс', () => {
@@ -704,7 +858,11 @@ describe('правки блока', () => {
 	});
 
 	it('allChecked считает только чекбоксы блока', () => {
-		const { lines, block } = blockOf(taskFileText({ body: ['- [x] Раз', '- [ ] Два'] }));
+		const { lines, block } = blockOf(taskFileText({
+			body: ['- [x] Раз', '\t- [ ] Два'],
+		}, {
+			body: ['- [x] Чужая'],
+		}));
 
 		expect(allChecked(lines, block)).toBe(false);
 	});
@@ -712,36 +870,45 @@ describe('правки блока', () => {
 	it('ставит параметр в канонический порядок', () => {
 		const content = taskFileText({ date: '2026-08-21', repeat: 'Каждый день' });
 		const { lines, block } = blockOf(content);
-		const next = applyEdits(lines, [setParamEdit(block, 'done', '2026-08-22')]).join('\n');
+		const next = applyEdits(lines, [setParamEdit(lines, block, 'done', '2026-08-22')]).join('\n');
 
-		expect(next).toBe([
-			'',
-			'- 📅 2026-08-21',
-			'- 🔁 Каждый день',
-			'- ✅ 2026-08-22',
-			'\t- [ ] Задача',
-			'',
-		].join('\n'));
+		expect(next).toBe(['', '- [ ] Задача 📅 2026-08-21 🔁 Каждый день ✅ 2026-08-22', '']
+			.join('\n'));
 	});
 
-	it('существующий параметр заменяется, а не дублируется', () => {
-		const content = taskFileText({ date: '2026-08-21', repeat: 'Каждый день' });
+	it('новый параметр встаёт за последним, текст за ним остаётся на месте', () => {
+		const content = ['', '- [ ] Дело 📅 2026-08-21 #работа', ''].join('\n');
 		const { lines, block } = blockOf(content);
-		const next = applyEdits(lines, [setParamEdit(block, 'date', '2026-08-30')]).join('\n');
+		const next = applyEdits(lines, [setParamEdit(lines, block, 'done', '2026-08-22')]).join('\n');
 
-		expect(next).toContain('- 📅 2026-08-30');
-		expect(next).not.toContain('2026-08-21');
-		expect(next.split('\n').filter((line) => line.startsWith('- 📅'))).toHaveLength(1);
+		expect(next).toBe(['', '- [ ] Дело 📅 2026-08-21 ✅ 2026-08-22 #работа', ''].join('\n'));
 	});
 
-	it('убирает параметр, а если его нет - ничего не делает', () => {
-		const content = taskFileText({ date: '2026-08-21', done: '2026-08-21' });
+	it('существующий параметр заменяется на месте, а не дублируется', () => {
+		const content = ['', '- [ ] Дело ✅ 2026-08-25 📅 2026-08-21 #работа', ''].join('\n');
 		const { lines, block } = blockOf(content);
-		const remove = removeParamEdit(block, 'done');
+		const next = applyEdits(lines, [setParamEdit(lines, block, 'date', '2026-08-30')]).join('\n');
+
+		expect(next).toBe(['', '- [ ] Дело ✅ 2026-08-25 📅 2026-08-30 #работа', ''].join('\n'));
+	});
+
+	it('↔️ без селектора при записи получает селектор', () => {
+		const content = ['', '- [ ] Дело 📅 2026-08-21 ↔ 2026-08-25', ''].join('\n');
+		const { lines, block } = blockOf(content);
+		const next = applyEdits(lines, [setParamEdit(lines, block, 'move', '2026-08-27')]).join('\n');
+
+		expect(next).toBe(['', '- [ ] Дело 📅 2026-08-21 ↔️ 2026-08-27', ''].join('\n'));
+	});
+
+	it('убирает параметр вместе с пробелом, а если его нет - ничего не делает', () => {
+		const content = taskFileText({ date: '2026-08-21', repeat: 'Каждый день', done: '2026-08-21' });
+		const { lines, block } = blockOf(content);
+		const remove = removeParamEdit(lines, block, 'repeat');
 
 		expect(remove).not.toBeNull();
-		expect(applyEdits(lines, [remove!]).join('\n')).not.toContain('✅');
-		expect(removeParamEdit(block, 'repeat')).toBeNull();
+		expect(applyEdits(lines, [remove!]).join('\n'))
+			.toBe(['', '- [ ] Задача 📅 2026-08-21 ✅ 2026-08-21', ''].join('\n'));
+		expect(removeParamEdit(lines, block, 'move')).toBeNull();
 	});
 
 	it('новый блок повтора: та же 🔁, то же тело со снятыми чекбоксами', () => {
@@ -754,10 +921,23 @@ describe('правки блока', () => {
 		const { lines, block } = blockOf(content);
 
 		expect(repeatBlockLines(lines, block, '2026-08-21')).toEqual([
-			'- 📅 2026-08-21',
-			'- 🔁 Каждый день',
-			'\t- [ ] Дело',
-			'\t\t- [ ] Подпункт',
+			'- [ ] Дело 📅 2026-08-21 🔁 Каждый день',
+			'\t- [ ] Подпункт',
+		]);
+	});
+
+	it('копия блока: свои параметры уходят, текст между ними остаётся, отступы - табами', () => {
+		const content = [
+			'',
+			'- [x] Дело 📅 2026-08-20 #работа 🔁 Каждый день ✅ 2026-08-20',
+			'    - [x] Подпункт',
+			'',
+		].join('\n');
+		const { lines, block } = blockOf(content);
+
+		expect(repeatBlockLines(lines, block, '2026-08-21')).toEqual([
+			'- [ ] Дело #работа 📅 2026-08-21 🔁 Каждый день',
+			'\t- [ ] Подпункт',
 		]);
 	});
 
@@ -769,9 +949,8 @@ describe('правки блока', () => {
 		}));
 
 		expect(occurrenceBlockLines(lines, block, '2026-08-29')).toEqual([
-			'- 📅 2026-08-29',
-			'\t- [ ] Дело',
-			'\t\t- [ ] Подпункт',
+			'- [ ] Дело 📅 2026-08-29',
+			'\t- [ ] Подпункт',
 		]);
 	});
 
@@ -784,18 +963,14 @@ describe('правки блока', () => {
 
 		// Уехал сам блок - отметки едут с ним: это тот же экземпляр.
 		expect(movedBlockLines(lines, block, '2026-08-22', '2026-08-25', true)).toEqual([
-			'- 📅 2026-08-22',
-			'- ↔️ 2026-08-25',
-			'\t- [x] Дело',
-			'\t\t- [ ] Подпункт',
+			'- [x] Дело 📅 2026-08-22 ↔️ 2026-08-25',
+			'\t- [ ] Подпункт',
 		]);
 
 		// Уехал расчётный день череды - тело чистое, отмечать там было нечего.
 		expect(movedBlockLines(lines, block, '2026-08-23', '2026-08-25')).toEqual([
-			'- 📅 2026-08-23',
-			'- ↔️ 2026-08-25',
-			'\t- [ ] Дело',
-			'\t\t- [ ] Подпункт',
+			'- [ ] Дело 📅 2026-08-23 ↔️ 2026-08-25',
+			'\t- [ ] Подпункт',
 		]);
 	});
 
@@ -804,13 +979,9 @@ describe('правки блока', () => {
 			date: '2026-08-21',
 			repeat: 'Каждый день',
 		}));
-		const next = applyEdits(lines, [setParamEdit(block, 'move', '2026-08-30')]).join('\n');
+		const next = applyEdits(lines, [setParamEdit(lines, block, 'move', '2026-08-30')]).join('\n');
 
-		expect(next.split('\n').slice(1, 4)).toEqual([
-			'- 📅 2026-08-21',
-			'- ↔️ 2026-08-30',
-			'- 🔁 Каждый день',
-		]);
+		expect(next.split('\n')[1]).toBe('- [ ] Задача 📅 2026-08-21 ↔️ 2026-08-30 🔁 Каждый день');
 	});
 
 	it('выполненный блок дописывается за последним, а не в конец файла', () => {
@@ -830,7 +1001,7 @@ describe('правки блока', () => {
 	it('отпечаток блока не зависит от тела: ни от галочек, ни от текста', () => {
 		const open = blockOf(taskFileText({ body: ['- [ ] Дело'] }));
 		const done = blockOf(taskFileText({ body: ['- [x] Дело'] }));
-		const extra = blockOf(taskFileText({ body: ['- [x] Дело', '- [ ] Ещё'] }));
+		const extra = blockOf(taskFileText({ body: ['- [x] Дело', '\t- [ ] Ещё'] }));
 
 		expect(blockShape(open.block)).toBe(blockShape(done.block));
 		expect(blockShape(open.block)).toBe(blockShape(extra.block));
@@ -854,14 +1025,14 @@ describe('правки блока', () => {
 		expect(blockShape(one.block)).not.toBe(blockShape(marked.block));
 	});
 
-	it('валидность блока: 📅, чекбокс в теле, разобранный повтор', () => {
+	it('валидность блока: 📅, разобранный повтор', () => {
 		const good = blockOf(taskFileText({ date: '2026-08-13', repeat: 'Каждый день' }));
-		const noBoxes = blockOf(taskFileText({ date: '2026-08-13', body: ['- Пункт'] }));
+		const badDate = blockOf(taskFileText({ date: '2026-02-30' }));
 		const badRepeat = blockOf(taskFileText({ repeat: 'Каждый месяц в Субботу' }));
-		const noDate = blockOf(['', '- 🔁 Каждый день', '\t- [ ] Дело', ''].join('\n'));
+		const noDate = blockOf(['', '- [ ] Дело 🔁 Каждый день', ''].join('\n'));
 
 		expect(isValidBlock(good.lines, good.block)).toBe(true);
-		expect(isValidBlock(noBoxes.lines, noBoxes.block)).toBe(false);
+		expect(isValidBlock(badDate.lines, badDate.block)).toBe(false);
 		expect(isValidBlock(badRepeat.lines, badRepeat.block)).toBe(false);
 		expect(isValidBlock(noDate.lines, noDate.block)).toBe(false);
 	});
