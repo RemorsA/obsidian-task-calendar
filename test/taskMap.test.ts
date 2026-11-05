@@ -564,7 +564,7 @@ describe('карта задач', () => {
 			expect(double.vault.contentOf('note.md')).not.toContain('2026-08-13');
 		});
 
-		it('повторная: экземпляр уходит вниз с новой 📅, череда шагает дальше', async () => {
+		it('повторная: экземпляр уходит вниз с ↔️ новой даты, череда шагает дальше', async () => {
 			await setup({
 				files: {
 					'note.md': taskFileText({
@@ -577,11 +577,11 @@ describe('карта задач', () => {
 
 			await map.moveTask('/note.md#0', '2026-08-25');
 
-			// Новая дата - сразу в 📅, ↔️ плагин больше не пишет.
+			// В 📅 экземпляра - день череды, с которого он уехал, новая дата - в ↔️.
 			expect(double.vault.contentOf('note.md')).toBe([
 				'',
 				'- [ ] Полить фикус 📅 2026-08-29 🔁 Каждую неделю в Субботу',
-				'- [ ] Полить фикус 📅 2026-08-25',
+				'- [ ] Полить фикус 📅 2026-08-22 ↔️ 2026-08-25',
 				'',
 			].join('\n'));
 		});
@@ -595,8 +595,8 @@ describe('карта задач', () => {
 
 			await map.moveTask('/note.md#0', '2026-08-25');
 
-			expect(map.all().find((task) => task.date === '2026-08-25')).toMatchObject({
-				move: null,
+			expect(map.all().find((task) => task.move === '2026-08-25')).toMatchObject({
+				date: '2026-08-22',
 				repeat: null,
 				done: null,
 			});
@@ -644,7 +644,7 @@ describe('карта задач', () => {
 
 			await map.moveTask('/note.md#0', '2026-08-25');
 
-			expect(map.all().find((task) => task.date === '2026-08-25')?.body)
+			expect(map.all().find((task) => task.move === '2026-08-25')?.body)
 				.toBe('- [x] Раз\n\t- [ ] Два');
 			expect(chain()?.body).toBe('- [ ] Раз\n\t- [ ] Два');
 		});

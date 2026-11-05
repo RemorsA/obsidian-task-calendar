@@ -17,6 +17,7 @@ import {
 	nextDate,
 	nextFreeDate,
 	occurrenceBlockLines,
+	movedBlockLines,
 	occurrencesInRange,
 	parseBlocks,
 	parseRepeat,
@@ -953,7 +954,7 @@ describe('правки блока', () => {
 		]);
 	});
 
-	it('блок перенесённого экземпляра: 📅 новой даты, без ↔️ и 🔁', () => {
+	it('блок перенесённого экземпляра: 📅 дня череды, ↔️ новой даты, без 🔁', () => {
 		const { lines, block } = blockOf(taskFileText({
 			date: '2026-08-22',
 			repeat: 'Каждый день',
@@ -961,16 +962,23 @@ describe('правки блока', () => {
 		}));
 
 		// Уехал сам блок - отметки едут с ним: это тот же экземпляр.
-		expect(occurrenceBlockLines(lines, block, '2026-08-25', true)).toEqual([
-			'- [x] Дело 📅 2026-08-25',
+		expect(movedBlockLines(lines, block, '2026-08-22', '2026-08-25', true)).toEqual([
+			'- [x] Дело 📅 2026-08-22 ↔️ 2026-08-25',
 			'\t- [ ] Подпункт',
 		]);
 
 		// Уехал расчётный день череды - тело чистое, отмечать там было нечего.
-		expect(occurrenceBlockLines(lines, block, '2026-08-25')).toEqual([
-			'- [ ] Дело 📅 2026-08-25',
+		expect(movedBlockLines(lines, block, '2026-08-23', '2026-08-25')).toEqual([
+			'- [ ] Дело 📅 2026-08-23 ↔️ 2026-08-25',
 			'\t- [ ] Подпункт',
 		]);
+	});
+
+	it('экземпляр, вернувшийся на день череды, ↔️ не получает', () => {
+		const { lines, block } = blockOf(taskFileText({ date: '2026-08-22', repeat: 'Каждый день' }));
+
+		expect(movedBlockLines(lines, block, '2026-08-22', '2026-08-22', true))
+			.toEqual(['- [ ] Задача 📅 2026-08-22']);
 	});
 
 	it('↔️ встаёт сразу после 📅', () => {
