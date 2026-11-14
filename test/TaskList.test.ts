@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount, VueWrapper } from '@vue/test-utils';
 import momentLib from 'moment';
 import TaskList from '../src/components/TaskList.vue';
-import { Notice, parseFrontmatter, Platform, TFile } from './mocks/obsidian';
+import { MarkdownRenderer, Notice, parseFrontmatter, Platform, TFile } from './mocks/obsidian';
 import {
 	createPluginDouble,
 	PluginDoubleOptions,
@@ -85,7 +85,7 @@ describe('свитч включён: 100 ближайших невыполнен
 		expect(done.wrapper.find('.task__calendar-list-empty').text()).toBe('Задач нет');
 	});
 
-	it('просроченные первыми отдельным правилом: перенесённая на прошедший день - наверху', async () => {
+	it('просроченные первыми отдельным правилом; «Дата переноса» на просрочку и место не влияет', async () => {
 		const { wrapper } = await mountOpenList({
 			files: {
 				'a.md': taskFileText({ text: 'Сегодня', date: `${TODAY}T08:00:00` }),
@@ -94,7 +94,7 @@ describe('свитч включён: 100 ближайших невыполнен
 			},
 		});
 
-		expect(cardTexts(wrapper)).toEqual(['Перенесли назад', 'Перенесли вперёд', 'Сегодня']);
+		expect(cardTexts(wrapper)).toEqual(['Перенесли вперёд', 'Сегодня', 'Перенесли назад']);
 		expect(modifiers(wrapper)).toEqual([['--is-overdue'], [], []]);
 	});
 
@@ -143,7 +143,7 @@ describe('свитч включён: 100 ближайших невыполнен
 describe('карточка', () => {
 	const PATH = 'Задачи/20260810_090000.md';
 
-	it('заголовок - день показа, тело - задача и подзадачи', async () => {
+	it('заголовок - день из «Дата и время» («Дата переноса» не влияет), тело - задача и подзадачи', async () => {
 		const { wrapper } = await mountOpenList({
 			files: {
 				[PATH]: taskFileText({
@@ -157,21 +157,22 @@ describe('карточка', () => {
 		const card = wrapper.find('.tasks__item');
 		const boxes = card.findAll('input.task-list-item-checkbox');
 
-		expect(card.find('.tasks__item-date').text()).toBe('август 20 2026');
+		expect(card.find('.tasks__item-date').text()).toBe('Понедельник 10 августа');
 		expect(card.find('.tasks__item-body').text()).toContain('Купить');
 		expect(boxes.map((box) => (box.element as HTMLInputElement).checked)).toEqual([false, true, false]);
 	});
 
-	it('день в заголовке - месяц словом, число двумя цифрами, год: «июль 04 2027»', async () => {
+	it('день в заголовке - «Суббота 14 июля»: день недели, число, месяц; год - только не текущий', async () => {
 		const { wrapper } = await mountOpenList({
 			files: {
-				'а.md': taskFileText({ text: 'Июль', date: '2027-07-04' }),
-				'б.md': taskFileText({ text: 'Январь', date: '2027-01-09' }),
+				'а.md': taskFileText({ text: 'Август', date: '2026-08-14' }),
+				'б.md': taskFileText({ text: 'Июль', date: '2027-07-04' }),
+				'в.md': taskFileText({ text: 'Январь', date: '2027-01-09' }),
 			},
 		});
 
-		expect(wrapper.findAll('.tasks__item-date').map((date) => date.text()).sort())
-			.toEqual(['июль 04 2027', 'январь 09 2027']);
+		expect(wrapper.findAll('.tasks__item-date').map((date) => date.text()))
+			.toEqual(['Пятница 14 августа', 'Суббота 9 января 2027', 'Воскресенье 4 июля 2027']);
 	});
 
 	it('у задачи без даты в заголовке так и написано', async () => {
@@ -252,6 +253,39 @@ describe('карточка', () => {
 		}
 	});
 
+	it('вложенные подзадачи - с отступом по уровню; без показанного родителя - уровнем выше', async () => {
+		await mountOpenList({
+			files: {
+				[PATH]: taskFileText({
+					text: 'Главная задача',
+					subtasks: [['Раз', false], ['Раз-раз', true, '1-1'], ['Раз-два', false, '1-2'], ['Без родителя', false, '3-1']],
+				}),
+			},
+		});
+
+		expect(MarkdownRenderer.calls[MarkdownRenderer.calls.length - 1].markdown).toBe([
+			'- [ ] Главная задача',
+			'\t- [ ] Раз',
+			'\t\t- [x] Раз-раз',
+			'\t\t- [ ] Раз-два',
+			'\t- [ ] Без родителя',
+		].join('\n'));
+	});
+
+	it('галочка вложенной подзадачи пишет её «-выполнено»', async () => {
+		const { wrapper, vault } = await mountOpenList({
+			files: { [PATH]: taskFileText({ subtasks: [['Раз', false], ['Раз-раз', false, '1-1'], ['Раз-два', false, '1-2']] }) },
+		});
+
+		await wrapper.findAll('input.task-list-item-checkbox')[3].trigger('click');
+		await flushPromises();
+
+		expect(parseFrontmatter(vault.contentOf(PATH) ?? '')).toMatchObject({
+			'Подзадача-1-1-выполнено': false,
+			'Подзадача-1-2-выполнено': true,
+		});
+	});
+
 	it('галочка подзадачи пишет свою подзадачу', async () => {
 		const { wrapper, vault } = await mountOpenList({
 			files: { [PATH]: taskFileText({ subtasks: [['Раз', false], ['Два', false]] }) },
@@ -276,7 +310,7 @@ describe('карточка', () => {
 		await flushPromises();
 
 		expect(cardTexts(wrapper)).toEqual(['Полить фикус']);
-		expect(wrapper.find('.tasks__item-date').text()).toBe('август 14 2026');
+		expect(wrapper.find('.tasks__item-date').text()).toBe('Пятница 14 августа');
 	});
 
 	it('снятая галочка возвращает выполненную в список', async () => {
@@ -396,7 +430,7 @@ describe('режим дня: свитч выключен (по умолчани�
 			files: {
 				'1.md': taskFileText({ text: 'Долг', date: '2026-08-01' }),
 				'2.md': taskFileText({ text: 'Сегодня', date: TODAY }),
-				'3.md': taskFileText({ text: 'Двадцатое', date: '2026-08-10', move: '2026-08-20' }),
+				'3.md': taskFileText({ text: 'Двадцатое', date: '2026-08-20' }),
 			},
 		});
 
@@ -475,7 +509,7 @@ describe('режим дня: свитч выключен (по умолчани�
 		expect(wrapper.find('.task__calendar-container').exists()).toBe(true);
 		expect(wrapper.find('.week-day.--is-focused').exists()).toBe(false);
 		expect(cardTexts(wrapper)).toEqual(['Дело', 'Двадцатое']);
-		expect(wrapper.find('.tasks__item-date').text()).toBe('август 13 2026');
+		expect(wrapper.find('.tasks__item-date').text()).toBe('Четверг 13 августа');
 
 		plugin.settings.calendarInList = false;
 		await plugin.saveSettings();
@@ -515,7 +549,7 @@ describe('связь с картой', () => {
 		await settle();
 
 		expect(cardTexts(wrapper)).toEqual(['Стало']);
-		expect(wrapper.find('.tasks__item-date').text()).toBe('август 14 2026');
+		expect(wrapper.find('.tasks__item-date').text()).toBe('Пятница 14 августа');
 	});
 
 	it('удалённая задача уходит из списка', async () => {

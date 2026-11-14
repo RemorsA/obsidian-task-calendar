@@ -279,7 +279,7 @@ describe('свойства задачи', () => {
 			doneDate: '2026-08-13',
 			repeat: 'Каждый день',
 			move: '2026-08-15',
-			subtasks: [{ number: 1, text: 'Проверить срок', checked: true }],
+			subtasks: [{ path: [1], text: 'Проверить срок', checked: true }],
 		});
 	});
 
@@ -351,9 +351,42 @@ describe('свойства задачи', () => {
 		});
 
 		expect(task?.subtasks).toEqual([
-			{ number: 1, text: 'Раз', checked: true },
-			{ number: 2, text: 'Два', checked: false },
+			{ path: [1], text: 'Раз', checked: true },
+			{ path: [2], text: 'Два', checked: false },
 		]);
+	});
+
+	it('вложенные подзадачи: номер по уровням, порядок обхода дерева, своя галочка у каждой', () => {
+		const task = readTask('a.md', {
+			Задача: 'Главная задача',
+			'Подзадача-2': 'Два',
+			'Подзадача-1-2': 'Раз-два',
+			'Подзадача-1-2-выполнено': true,
+			'Подзадача-1': 'Раз',
+			'Подзадача-1-1': 'Раз-раз',
+			'Подзадача-1-1-1': 'Раз-раз-раз',
+			'Подзадача-10': 'Десять',
+		});
+
+		expect(task?.subtasks).toEqual([
+			{ path: [1], text: 'Раз', checked: false },
+			{ path: [1, 1], text: 'Раз-раз', checked: false },
+			{ path: [1, 1, 1], text: 'Раз-раз-раз', checked: false },
+			{ path: [1, 2], text: 'Раз-два', checked: true },
+			{ path: [2], text: 'Два', checked: false },
+			{ path: [10], text: 'Десять', checked: false },
+		]);
+	});
+
+	it('отмечено всё - и на всех уровнях вложенности', () => {
+		const props = (nested: boolean) => ({
+			Задача: 'Дело', Выполнено: true,
+			'Подзадача-1': 'Раз', 'Подзадача-1-выполнено': true,
+			'Подзадача-1-1': 'Раз-раз', 'Подзадача-1-1-выполнено': nested,
+		});
+
+		expect(allChecked(readTask('a.md', props(false))!)).toBe(false);
+		expect(allChecked(readTask('a.md', props(true))!)).toBe(true);
 	});
 
 	it('галочка без текста подзадачей не считается', () => {
@@ -383,16 +416,17 @@ describe('отмечено всё, день показа, просрочка', (
 		expect(allChecked(taskOf({ checked: false, subtasks: [['Раз', true]] }))).toBe(false);
 	});
 
-	it('день показа - дата переноса, если она есть', () => {
-		expect(showDate(taskOf({ date: '2026-08-13' }))).toBe('2026-08-13');
-		expect(showDate(taskOf({ date: '2026-08-13', move: '2026-08-20' }))).toBe('2026-08-20');
+	it('день показа - день из «Дата и время», «Дата переноса» на него не влияет', () => {
+		expect(showDate(taskOf({ date: '2026-08-13T09:00:00' }))).toBe('2026-08-13');
+		expect(showDate(taskOf({ date: '2026-08-13', move: '2026-08-20' }))).toBe('2026-08-13');
 		expect(showDate(taskOf({ date: null }))).toBeNull();
 	});
 
 	it('просрочена: не выполнена и день показа прошёл', () => {
 		expect(isOverdue(taskOf({ date: '2026-08-12' }), TODAY)).toBe(true);
 		expect(isOverdue(taskOf({ date: '2026-08-12', doneDate: TODAY }), TODAY)).toBe(false);
-		expect(isOverdue(taskOf({ date: '2026-08-12', move: '2026-08-14' }), TODAY)).toBe(false);
+		// Перенос вперёд просрочку не снимает: «Дата переноса» не учитывается.
+		expect(isOverdue(taskOf({ date: '2026-08-12', move: '2026-08-14' }), TODAY)).toBe(true);
 		expect(isOverdue(taskOf({ date: null }), TODAY)).toBe(false);
 	});
 });
@@ -436,6 +470,37 @@ describe('нумерация подзадач', () => {
 
 		expect(frontmatter).toEqual({ Задача: 'Дело', 'Подзадача-1': null });
 	});
+
+	it('вложенные: дыру видно на любом уровне, подряд идущие - не дыра', () => {
+		expect(hasNumberingGap({ 'Подзадача-1': 'a', 'Подзадача-1-1': 'b', 'Подзадача-1-2': 'c', 'Подзадача-2': 'd' })).toBe(false);
+		expect(hasNumberingGap({ 'Подзадача-1': 'a', 'Подзадача-1-2': 'c' })).toBe(true);
+		// Родитель без своих свойств - всё равно узел дерева: дыры нет.
+		expect(hasNumberingGap({ 'Подзадача-1-1': 'b' })).toBe(false);
+	});
+
+	it('удалили родителя из середины - соседи сдвигаются, вложенные едут за родителем', () => {
+		const frontmatter: Frontmatter = {
+			Задача: 'Дело',
+			'Подзадача-1': 'Раз',
+			'Подзадача-3': 'Три',
+			'Подзадача-3-выполнено': true,
+			'Подзадача-3-1': 'Три-раз',
+			'Подзадача-3-3': 'Три-три',
+			'Подзадача-3-3-выполнено': false,
+		};
+
+		renumberSubtasks(frontmatter);
+
+		expect(frontmatter).toEqual({
+			Задача: 'Дело',
+			'Подзадача-1': 'Раз',
+			'Подзадача-2': 'Три',
+			'Подзадача-2-выполнено': true,
+			'Подзадача-2-1': 'Три-раз',
+			'Подзадача-2-2': 'Три-три',
+			'Подзадача-2-2-выполнено': false,
+		});
+	});
 });
 
 describe('автоматика', () => {
@@ -465,24 +530,39 @@ describe('автоматика', () => {
 			subtasks: [['Налить воды', true]],
 		});
 
-		// День - по расчёту, время - как у выполненной.
+		// Только день по расчёту: время выполненной (21:30) не переносится - его
+		// ставит запись файла, момент создания.
 		expect(automate(frontmatter, notAll, TODAY)).toEqual({
 			changed: true,
 			next: {
 				text: 'Полить фикус',
-				dateTime: '2026-08-16T21:30:00',
+				date: '2026-08-16',
 				repeat: 'Каждую неделю Суббота, Воскресенье',
-				subtasks: ['Налить воды'],
+				subtasks: [{ path: [1], text: 'Налить воды' }],
 			},
 		});
 		expect(frontmatter['Повтор']).toBeNull();
 		expect(frontmatter['Дата выполнения']).toBe(TODAY);
 	});
 
+	it('следующий повтор сохраняет вложенность подзадач, галочки сняты', () => {
+		const frontmatter = taskProps({
+			checked: true,
+			repeat: 'Каждый день',
+			subtasks: [['Раз', true], ['Раз-раз', true, '1-1'], ['Два', true, '2']],
+		});
+
+		expect(automate(frontmatter, notAll, TODAY).next?.subtasks).toEqual([
+			{ path: [1], text: 'Раз' },
+			{ path: [1, 1], text: 'Раз-раз' },
+			{ path: [2], text: 'Два' },
+		]);
+	});
+
 	it('база следующего повтора - «Дата и время», а не сегодняшний день', () => {
 		const frontmatter = taskProps({ checked: true, date: '2026-08-01', repeat: 'Каждый день' });
 
-		expect(automate(frontmatter, notAll, TODAY).next?.dateTime).toBe('2026-08-02T00:00:00');
+		expect(automate(frontmatter, notAll, TODAY).next?.date).toBe('2026-08-02');
 	});
 
 	it('нераспознанный повтор следующего файла не даёт и остаётся как написан', () => {
@@ -507,23 +587,24 @@ describe('автоматика', () => {
 		expect(automate(taskProps({ checked: true, doneDate: TODAY }), notAll, TODAY).changed).toBe(false);
 	});
 
-	it('дата переноса у повторной: повтор очищается, следующий файл - по «Дата и время»', () => {
+	it('дата переноса у повторной: повтор очищается, задача переезжает на день переноса, следующий файл - от исходного дня', () => {
 		const frontmatter = taskProps({
 			date: '2026-08-15T08:00:00',
 			move: '2026-08-17',
 			repeat: 'Каждую неделю Суббота',
 		});
 
-		expect(automate(frontmatter, notAll, TODAY).next).toMatchObject({ dateTime: '2026-08-22T08:00:00' });
+		expect(automate(frontmatter, notAll, TODAY).next).toMatchObject({ date: '2026-08-22' });
 		expect(frontmatter['Повтор']).toBeNull();
 		expect(frontmatter['Дата переноса']).toBe('2026-08-17');
-		expect(frontmatter['Дата и время']).toBe('2026-08-15T08:00:00');
+		// Время задачи то же, день - день переноса.
+		expect(frontmatter['Дата и время']).toBe('2026-08-17T08:00:00');
 	});
 
 	it('перенос на следующий день повтора - следующий файл встаёт на шаг дальше', () => {
 		const frontmatter = taskProps({ date: TODAY, move: '2026-08-14', repeat: 'Каждый день' });
 
-		expect(automate(frontmatter, notAll, TODAY).next?.dateTime).toBe('2026-08-15T00:00:00');
+		expect(automate(frontmatter, notAll, TODAY).next?.date).toBe('2026-08-15');
 	});
 
 	it('дата переноса у обычной задачи - ничего', () => {
@@ -555,10 +636,10 @@ describe('файл новой задачи', () => {
 	it('все свойства шаблона, пустые - пустыми, галочки сняты', () => {
 		expect(buildTaskFile({
 			text: 'Купить',
-			dateTime: '2026-08-13T08:00:00',
+			date: '2026-08-13',
 			repeat: 'Каждый день',
-			subtasks: ['молоко', 'хлеб'],
-		})).toBe([
+			subtasks: [{ path: [1], text: 'молоко' }, { path: [2], text: 'хлеб' }],
+		}, '08:00:00')).toBe([
 			'---',
 			'Задача: Купить',
 			'Выполнено: false',
@@ -576,19 +657,31 @@ describe('файл новой задачи', () => {
 	});
 
 	it('без повтора и подзадач', () => {
-		expect(buildTaskFile({ text: 'Дело', dateTime: `${TODAY}T12:00:00`, repeat: null, subtasks: [] }))
+		expect(buildTaskFile({ text: 'Дело', date: TODAY, repeat: null, subtasks: [] }, '12:00:00'))
 			.toBe('---\nЗадача: Дело\nВыполнено: false\nДата и время: 2026-08-13T12:00:00\nДата выполнения:\nПовтор:\nДата переноса:\n---\n');
 	});
 
+	it('вложенные подзадачи пишутся своими номерами и читаются обратно', () => {
+		const content = buildTaskFile({
+			text: 'Дело',
+			date: TODAY,
+			repeat: null,
+			subtasks: [{ path: [1], text: 'Раз' }, { path: [1, 1], text: 'Раз-раз' }, { path: [2], text: 'Два' }],
+		}, '12:00:00');
+
+		expect(content).toContain('Подзадача-1-1: Раз-раз\nПодзадача-1-1-выполнено: false\n');
+		expect(readTaskFile('a.md', content)?.subtasks.map((subtask) => subtask.path)).toEqual([[1], [1, 1], [2]]);
+	});
+
 	it('пустой текст - пустое «Задача»: шаблон для ручного заполнения задачей не считается', () => {
-		const content = buildTaskFile({ text: '', dateTime: null, repeat: null, subtasks: [] });
+		const content = buildTaskFile({ text: '', date: null, repeat: null, subtasks: [] }, '12:00:00');
 
 		expect(content).toBe('---\nЗадача:\nВыполнено: false\nДата и время:\nДата выполнения:\nПовтор:\nДата переноса:\n---\n');
 		expect(readTaskFile('a.md', content)).toBeNull();
 	});
 
-	it('«Дата и время» файла читается обратно тем же днём и временем', () => {
-		const content = buildTaskFile({ text: 'Дело', dateTime: '2026-08-13T08:05:09', repeat: null, subtasks: [] });
+	it('«Дата и время» = день задачи и время создания файла, читается обратно тем же', () => {
+		const content = buildTaskFile({ text: 'Дело', date: '2026-08-13', repeat: null, subtasks: [] }, '08:05:09');
 
 		expect(readTaskFile('a.md', content)).toMatchObject({ date: '2026-08-13', dateTime: '2026-08-13T08:05:09' });
 	});
@@ -606,7 +699,7 @@ describe('файл новой задачи', () => {
 		];
 
 		for (const text of texts) {
-			const content = buildTaskFile({ text, dateTime: `${TODAY}T12:00:00`, repeat: null, subtasks: [text] });
+			const content = buildTaskFile({ text, date: TODAY, repeat: null, subtasks: [{ path: [1], text }] }, '12:00:00');
 
 			expect(parseFrontmatter(content)?.['Задача'], text).toBe(text);
 			expect(parseFrontmatter(content)?.['Подзадача-1'], text).toBe(text);
@@ -664,17 +757,15 @@ describe('порядок списка', () => {
 		)).toEqual(['б.md', 'а.md']);
 	});
 
-	it('полный список: просроченные первыми, и по переносу тоже, дальше по «Дата и время»', () => {
+	it('полный список: просроченные первыми, дальше по «Дата и время»; «Дата переноса» не влияет', () => {
 		const ordered = [
-			// «Дата и время» в будущем, но перенесли на прошедший день - просрочена.
-			taskOf({ date: '2026-08-20T08:00:00', move: '2026-08-10' }, 'перенос-назад.md'),
+			taskOf({ date: '2026-08-20T08:00:00', move: '2026-08-10' }, 'будущая.md'),
 			taskOf({ date: '2026-08-11T08:00:00' }, 'просрочена.md'),
-			// «Дата и время» в прошлом, но перенесли вперёд - не просрочена.
-			taskOf({ date: '2026-08-01T08:00:00', move: '2026-08-15' }, 'перенос-вперёд.md'),
+			taskOf({ date: '2026-08-01T08:00:00', move: '2026-08-15' }, 'просрочена-раньше.md'),
 			taskOf({ date: `${TODAY}T09:00:00` }, 'сегодня.md'),
 		].sort(compareOverdueFirst(TODAY)).map((task) => task.path);
 
-		expect(ordered).toEqual(['просрочена.md', 'перенос-назад.md', 'перенос-вперёд.md', 'сегодня.md']);
+		expect(ordered).toEqual(['просрочена-раньше.md', 'просрочена.md', 'сегодня.md', 'будущая.md']);
 	});
 
 	it('одинаковое «Дата и время» - раньше созданный файл выше', () => {

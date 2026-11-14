@@ -53,11 +53,18 @@ export const PROPERTY_TYPES: Record<string, string> = {
 	[PROPS.move]: 'date',
 };
 
-export const subtaskTextKey = (number: number): string => `Подзадача-${number}`;
-export const subtaskCheckedKey = (number: number): string => `Подзадача-${number}-выполнено`;
+/** Номер подзадачи в имени свойства: путь [1, 2] - `1-2`. */
+const pathKey = (path: number[]): string => path.join('-');
 
-/** Ключ подзадачи: текст `Подзадача-N` или галочка `Подзадача-N-выполнено`. */
-const SUBTASK_KEY = /^Подзадача-(\d+)(-выполнено)?$/;
+export const subtaskTextKey = (path: number[]): string => `Подзадача-${pathKey(path)}`;
+export const subtaskCheckedKey = (path: number[]): string => `Подзадача-${pathKey(path)}-выполнено`;
+
+/**
+ * Ключ подзадачи: текст `Подзадача-N` или галочка `Подзадача-N-выполнено`. Номер
+ * бывает многоуровневым - `Подзадача-1-2` вложена в `Подзадача-1` (просьба
+ * пользователя 14.11.2026), глубина не ограничена.
+ */
+const SUBTASK_KEY = /^Подзадача-(\d+(?:-\d+)*)(-выполнено)?$/;
 
 /** Строго YYYY-MM-DD: времени и таймзон формат не хранит. */
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
@@ -80,8 +87,11 @@ export interface Repeat {
 }
 
 export interface Subtask {
-	/** N из имени свойства: по нему подзадача находится в файле. */
-	number: number;
+	/**
+	 * Номер из имени свойства по уровням: `Подзадача-1-2` - [1, 2]. По нему
+	 * подзадача находится в файле, длина - уровень вложенности.
+	 */
+	path: number[];
 	text: string;
 	checked: boolean;
 }
@@ -115,10 +125,14 @@ export interface Task {
 export interface NewTask {
 	/** `Задача`. Пусто - пустое свойство (шаблон для ручного заполнения). */
 	text: string;
-	/** `Дата и время`, `ГГГГ-ММ-ДДTЧЧ:ММ:СС`. */
-	dateTime: string | null;
+	/**
+	 * День `Дата и время`, `ГГГГ-ММ-ДД`. Время - момент создания файла, его ставит
+	 * запись (`buildTaskFile`), а не данные задачи.
+	 */
+	date: string | null;
 	repeat: string | null;
-	subtasks: string[];
+	/** Подзадачи: номер по уровням и текст, галочки сняты. */
+	subtasks: { path: number[]; text: string }[];
 }
 
 /**
@@ -461,55 +475,104 @@ const readText = (value: unknown): string | null => {
 const readFlag = (value: unknown): boolean =>
 	value === true || (typeof value === 'string' && value.trim().toLowerCase() === 'true');
 
-/** Номера подзадач, у которых есть хоть одно свойство пары, по возрастанию. */
-export const subtaskNumbers = (frontmatter: Frontmatter): number[] => {
-	const numbers = new Set<number>();
+/**
+ * Порядок обхода дерева подзадач: родитель перед детьми, соседи по номеру -
+ * 1, 1-1, 1-2, 2, 2-1.
+ */
+const comparePaths = (a: number[], b: number[]): number => {
+	for (let i = 0; i < Math.min(a.length, b.length); i++) {
+		if (a[i] !== b[i]) return a[i] - b[i];
+	}
+
+	return a.length - b.length;
+};
+
+/** Номера подзадач, у которых есть хоть одно свойство пары, в порядке обхода дерева. */
+export const subtaskPaths = (frontmatter: Frontmatter): number[][] => {
+	const paths = new Map<string, number[]>();
 
 	for (const key of Object.keys(frontmatter)) {
 		const match = key.match(SUBTASK_KEY);
-		if (match) numbers.add(Number(match[1]));
+		if (!match) continue;
+
+		const path = match[1].split('-').map(Number);
+		paths.set(pathKey(path), path);
 	}
 
-	return [...numbers].sort((a, b) => a - b);
+	return [...paths.values()].sort(comparePaths);
 };
 
 /**
- * Подзадачи по порядку N. Текст без пары `-выполнено` - неотмеченная подзадача;
- * `-выполнено` без текста пропускается: показывать в карточке нечего.
+ * Подзадачи в порядке обхода дерева. Текст без пары `-выполнено` - неотмеченная
+ * подзадача; `-выполнено` без текста пропускается: показывать в карточке нечего.
  */
 export const readSubtasks = (frontmatter: Frontmatter): Subtask[] =>
-	subtaskNumbers(frontmatter).flatMap((number) => {
-		const text = readText(frontmatter[subtaskTextKey(number)]);
+	subtaskPaths(frontmatter).flatMap((path) => {
+		const text = readText(frontmatter[subtaskTextKey(path)]);
 
 		return text === null
 			? []
-			: [{ number, text, checked: readFlag(frontmatter[subtaskCheckedKey(number)]) }];
+			: [{ path, text, checked: readFlag(frontmatter[subtaskCheckedKey(path)]) }];
 	});
 
-/** В нумерации подзадач дыра: удалили пару из середины. */
+/**
+ * Номера подзадач подряд на каждом уровне: старый номер -> новый. Узлы дерева -
+ * все номера и их начала: у `Подзадача-2-1` есть родитель 2, даже если у самой
+ * второй свойств нет. Соседи нумеруются 1, 2, 3 по порядку, дети едут за
+ * родителем: 1, 3, 3-2 -> 1, 2, 2-1.
+ */
+const renumberedPaths = (frontmatter: Frontmatter): Map<string, number[]> => {
+	const nodes = new Map<string, number[]>();
+
+	for (const path of subtaskPaths(frontmatter)) {
+		for (let depth = 1; depth <= path.length; depth++) {
+			const prefix = path.slice(0, depth);
+			nodes.set(pathKey(prefix), prefix);
+		}
+	}
+
+	const renumbered = new Map<string, number[]>();
+	const lastNumber = new Map<string, number>();
+
+	// Обход дерева: родитель уже перенумерован, соседи идут по возрастанию.
+	for (const path of [...nodes.values()].sort(comparePaths)) {
+		const parent = pathKey(path.slice(0, -1));
+		const number = (lastNumber.get(parent) ?? 0) + 1;
+
+		lastNumber.set(parent, number);
+		renumbered.set(pathKey(path), [...(renumbered.get(parent) ?? []), number]);
+	}
+
+	return renumbered;
+};
+
+/** В нумерации подзадач дыра на каком-нибудь уровне: удалили пару из середины. */
 export const hasNumberingGap = (frontmatter: Frontmatter): boolean =>
-	subtaskNumbers(frontmatter).some((number, i) => number !== i + 1);
+	[...renumberedPaths(frontmatter)].some(([key, path]) => key !== pathKey(path));
 
 /**
- * Перенумеровать подзадачи подряд: 1, 3, 4 -> 1, 2, 3. Пары переезжают целиком,
+ * Перенумеровать подзадачи подряд на каждом уровне: 1, 3, 4 -> 1, 2, 3, а
+ * вложенные переезжают вместе с родителем (3-1 -> 2-1). Пары переезжают целиком,
  * вместе с пустыми значениями: недописанную подзадачу не теряем.
  */
 export const renumberSubtasks = (frontmatter: Frontmatter): void => {
-	const pairs = subtaskNumbers(frontmatter).map((number) => ({
-		text: frontmatter[subtaskTextKey(number)],
-		checked: frontmatter[subtaskCheckedKey(number)],
-		hasText: subtaskTextKey(number) in frontmatter,
-		hasChecked: subtaskCheckedKey(number) in frontmatter,
+	const renumbered = renumberedPaths(frontmatter);
+	const pairs = subtaskPaths(frontmatter).map((path) => ({
+		path: renumbered.get(pathKey(path)) ?? path,
+		text: frontmatter[subtaskTextKey(path)],
+		checked: frontmatter[subtaskCheckedKey(path)],
+		hasText: subtaskTextKey(path) in frontmatter,
+		hasChecked: subtaskCheckedKey(path) in frontmatter,
 	}));
 
 	for (const key of Object.keys(frontmatter)) {
 		if (SUBTASK_KEY.test(key)) delete frontmatter[key];
 	}
 
-	pairs.forEach((pair, i) => {
-		if (pair.hasText) frontmatter[subtaskTextKey(i + 1)] = pair.text;
-		if (pair.hasChecked) frontmatter[subtaskCheckedKey(i + 1)] = pair.checked;
-	});
+	for (const pair of pairs) {
+		if (pair.hasText) frontmatter[subtaskTextKey(pair.path)] = pair.text;
+		if (pair.hasChecked) frontmatter[subtaskCheckedKey(pair.path)] = pair.checked;
+	}
 };
 
 /** Папка без слэшей по краям и имя файла без расширения. */
@@ -575,8 +638,13 @@ export const readTaskFile = (path: string, content: string): Task | null =>
 export const allChecked = (task: Task): boolean =>
 	task.checked && task.subtasks.every((subtask) => subtask.checked);
 
-/** День показа: `Дата переноса`, если она есть, иначе `Дата и время`. */
-export const showDate = (task: Task): string | null => task.move ?? task.date;
+/**
+ * День показа - день из `Дата и время`. `Дата переноса` на показ не влияет
+ * (решение пользователя 14.11.2026: у обычной задачи её не учитывать, а
+ * перенесённая повторная получает новый день прямо в `Дата и время`, см.
+ * `automate`). До этого день показа был `Дата переноса ?? Дата и время`.
+ */
+export const showDate = (task: Task): string | null => task.date;
 
 /** Задача просрочена: не выполнена, а её день показа уже прошёл. */
 export const isOverdue = (task: Task, today: string): boolean => {
@@ -596,13 +664,14 @@ export const stateOf = (task: Task): TaskState => ({ all: allChecked(task), move
 
 /**
  * Данные файла следующего повтора: то же, что у задачи, галочки сняты. День -
- * по расчёту, время - как у задачи.
+ * по расчёту; время выполненной не переносится - в `Дата и время` встанет
+ * момент создания файла (просьба пользователя 14.11.2026).
  */
 const nextTaskOf = (task: Task, date: string): NewTask => ({
 	text: task.text,
-	dateTime: `${date}T${task.dateTime?.slice(11) ?? '00:00:00'}`,
+	date,
 	repeat: task.repeat,
-	subtasks: task.subtasks.map((subtask) => subtask.text),
+	subtasks: task.subtasks.map(({ path, text }) => ({ path, text })),
 });
 
 export interface Automation {
@@ -620,7 +689,7 @@ export interface Automation {
  * |---|---|
  * | не всё отмечено -> всё | `Дата выполнения` - сегодня; есть повтор - он очищается, нужен следующий файл |
  * | всё -> снята любая галочка | `Дата выполнения` очищается, повтор не возвращается |
- * | `Дата переноса` появилась у невыполненной повторной | повтор очищается, нужен следующий файл |
+ * | `Дата переноса` появилась у невыполненной повторной | повтор очищается, день `Дата и время` - день переноса, нужен следующий файл |
  * | дыра в нумерации подзадач | перенумеровать подряд |
  *
  * Срабатывают только переходы относительно прошлого состояния `previous`:
@@ -663,10 +732,14 @@ export const automate = (frontmatter: Frontmatter, previous: TaskState, today: s
 	}
 
 	if (task.move !== null && previous.move === null && task.doneDate === null && repeat && task.date) {
+		// Следующий повтор - от исходного дня, до переноса.
 		const date = nextRepeatDate(task.date, repeat, task.move);
 
 		if (date) {
 			frontmatter[PROPS.repeat] = null;
+			// Сама задача переезжает на день переноса, время то же: день показа -
+			// только `Дата и время` (решение пользователя 14.11.2026).
+			frontmatter[PROPS.date] = `${task.move}T${task.dateTime?.slice(11) ?? '00:00:00'}`;
 			result.changed = true;
 			result.next = nextTaskOf(task, date);
 		}
@@ -700,22 +773,25 @@ const yamlLine = (key: string, value: string | boolean | null): string =>
  * сняты. Даты пишутся как есть, тексты - в кавычках, когда без них YAML прочитал
  * бы не то. Пустой текст - пустое `Задача:`: такой файл задачей не считается,
  * пока его не заполнят.
+ *
+ * `time` - время создания файла `ЧЧ:ММ:СС`: `Дата и время` = день задачи и это
+ * время, у пустого шаблона и у следующего повтора одинаково.
  */
-export const buildTaskFile = (task: NewTask): string => {
+export const buildTaskFile = (task: NewTask, time: string): string => {
 	const lines = [
 		'---',
 		yamlLine(PROPS.text, task.text ? yamlString(task.text) : null),
 		yamlLine(PROPS.checked, false),
-		yamlLine(PROPS.date, task.dateTime),
+		yamlLine(PROPS.date, task.date ? `${task.date}T${time}` : null),
 		yamlLine(PROPS.doneDate, null),
 		yamlLine(PROPS.repeat, task.repeat ? yamlString(task.repeat) : null),
 		yamlLine(PROPS.move, null),
 	];
 
-	task.subtasks.forEach((text, i) => {
-		lines.push(yamlLine(subtaskTextKey(i + 1), yamlString(text)));
-		lines.push(yamlLine(subtaskCheckedKey(i + 1), false));
-	});
+	for (const { path, text } of task.subtasks) {
+		lines.push(yamlLine(subtaskTextKey(path), yamlString(text)));
+		lines.push(yamlLine(subtaskCheckedKey(path), false));
+	}
 
 	lines.push('---', '');
 

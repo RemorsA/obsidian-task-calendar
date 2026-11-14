@@ -4,7 +4,6 @@ import {
 	automate,
 	buildTaskFile,
 	DATE_FORMAT,
-	DATE_TIME_FORMAT,
 	Frontmatter,
 	frontmatterOf,
 	NewTask,
@@ -448,7 +447,7 @@ export class TaskMap {
 			const subtask = fresh.subtasks[index - 1];
 			if (!subtask) return false;
 
-			frontmatter[subtaskCheckedKey(subtask.number)] = !subtask.checked;
+			frontmatter[subtaskCheckedKey(subtask.path)] = !subtask.checked;
 
 			return true;
 		});
@@ -478,14 +477,15 @@ export class TaskMap {
 
 		return this.createFile(
 			folder,
-			{ text: '', dateTime: now.format(DATE_TIME_FORMAT), repeat: null, subtasks: [] },
+			{ text: '', date: now.format(DATE_FORMAT), repeat: null, subtasks: [] },
 			now
 		);
 	}
 
 	/**
 	 * Файл задачи в папке. Имя - время создания; занято (две задачи в одну
-	 * секунду) - с суффиксом `_2`, `_3`.
+	 * секунду) - с суффиксом `_2`, `_3`. То же время - в `Дата и время`: и у
+	 * пустого шаблона, и у следующего повтора.
 	 *
 	 * Карта сводится сразу: карточка должна появиться, не дожидаясь debounce.
 	 */
@@ -496,7 +496,7 @@ export class TaskMap {
 
 		for (let n = 2; vault.getAbstractFileByPath(path); n++) path = `${base}_${n}.md`;
 
-		const content = buildTaskFile(task);
+		const content = buildTaskFile(task, now.format('HH:mm:ss'));
 
 		try {
 			await vault.create(path, content);

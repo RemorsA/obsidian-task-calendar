@@ -37,8 +37,11 @@ export interface TaskFixture {
 	repeat?: string | null;
 	/** `Дата переноса`. */
 	move?: string | null;
-	/** Подзадачи парами: текст и галочка. */
-	subtasks?: [string, boolean][];
+	/**
+	 * Подзадачи: текст, галочка и, если нужен, номер по уровням (`'1-2'`). Без
+	 * номера - подряд верхним уровнем: 1, 2, 3.
+	 */
+	subtasks?: [string, boolean, string?][];
 	/** Текст под блоком свойств. */
 	body?: string;
 }
@@ -54,9 +57,9 @@ export const taskProps = (task: TaskFixture = {}): Record<string, unknown> => {
 		'Дата переноса': task.move ?? null,
 	};
 
-	(task.subtasks ?? []).forEach(([text, checked], i) => {
-		props[`Подзадача-${i + 1}`] = text;
-		props[`Подзадача-${i + 1}-выполнено`] = checked;
+	(task.subtasks ?? []).forEach(([text, checked, number], i) => {
+		props[`Подзадача-${number ?? i + 1}`] = text;
+		props[`Подзадача-${number ?? i + 1}-выполнено`] = checked;
 	});
 
 	return props;

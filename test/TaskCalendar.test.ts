@@ -174,13 +174,13 @@ describe('точки на днях', () => {
 		expect(wrapper.findAll('.week-day--dot')).toHaveLength(0);
 	});
 
-	it('перенесённая задача - точка на дне переноса', async () => {
+	it('«Дата переноса» на точку не влияет - точка на дне из «Дата и время»', async () => {
 		const { wrapper } = await mountCalendar({
 			files: { 'a.md': taskFileText({ date: '2026-08-15', move: '2026-08-18' }) },
 		});
 
-		expect(hasDot(wrapper, '2026-08-15')).toBe(false);
-		expect(hasDot(wrapper, '2026-08-18')).toBe(true);
+		expect(hasDot(wrapper, '2026-08-15')).toBe(true);
+		expect(hasDot(wrapper, '2026-08-18')).toBe(false);
 	});
 
 	it('повтор: точки на всех будущих днях после «Дата», до неё - нет', async () => {

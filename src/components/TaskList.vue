@@ -221,14 +221,46 @@ const checkbox = (checked: boolean): string => (checked ? '[x]' : '[ ]');
 const oneLine = (text: string): string => text.replace(/\s*[\r\n]+\s*/g, ' ');
 
 /**
- * Тело карточки - список: сама задача и подзадачи с отступом. Галочки идут в
- * том же порядке, в каком их номера отдаёт `TaskBody`: 0 - задача, дальше
- * подзадачи.
+ * Уровень подзадачи в карточке: на один глубже ближайшего показанного предка
+ * (`Подзадача-1-2` - под `Подзадача-1`, просьба пользователя 14.11.2026). Предка
+ * без текста нет в карточке - тогда подзадача встаёт уровнем выше, а не под
+ * чужого соседа. Подзадачи идут в порядке обхода дерева: предок уже посчитан.
  */
-const bodyOf = (task: Task): string => [
-	`- ${checkbox(task.checked)} ${oneLine(task.text)}`,
-	...task.subtasks.map((subtask) => `\t- ${checkbox(subtask.checked)} ${oneLine(subtask.text)}`),
-].join('\n');
+const subtaskDepths = (task: Task): number[] => {
+	const depths = new Map<string, number>();
+
+	return task.subtasks.map(({ path }) => {
+		let depth = 1;
+
+		for (let length = path.length - 1; length > 0; length--) {
+			const parent = depths.get(path.slice(0, length).join('-'));
+
+			if (parent !== undefined) {
+				depth = parent + 1;
+				break;
+			}
+		}
+
+		depths.set(path.join('-'), depth);
+
+		return depth;
+	});
+};
+
+/**
+ * Тело карточки - список: сама задача и подзадачи с отступом по уровню. Галочки
+ * идут в том же порядке, в каком их номера отдаёт `TaskBody`: 0 - задача, дальше
+ * подзадачи в порядке обхода дерева.
+ */
+const bodyOf = (task: Task): string => {
+	const depths = subtaskDepths(task);
+
+	return [
+		`- ${checkbox(task.checked)} ${oneLine(task.text)}`,
+		...task.subtasks.map((subtask, i) =>
+			`${'\t'.repeat(depths[i])}- ${checkbox(subtask.checked)} ${oneLine(subtask.text)}`),
+	].join('\n');
+};
 
 /** Открыть файл задачи на правку свойств. */
 const openTask = async (path: string): Promise<void> => {
@@ -251,32 +283,39 @@ const handleToggle = async (task: Task, index: number): Promise<void> => {
 	await taskMap.toggle(task.path, index);
 };
 
+/** Дни недели по ISO: 1 - понедельник. Свои, а не локаль moment: язык Obsidian бывает любым. */
+const CARD_WEEKDAYS = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье'];
+
+/** Месяцы в родительном падеже: «14 июля». */
 const CARD_MONTHS = [
-	'январь',
-	'февраль',
-	'март',
-	'апрель',
-	'май',
-	'июнь',
-	'июль',
-	'август',
-	'сентябрь',
-	'октябрь',
-	'ноябрь',
-	'декабрь',
+	'января',
+	'февраля',
+	'марта',
+	'апреля',
+	'мая',
+	'июня',
+	'июля',
+	'августа',
+	'сентября',
+	'октября',
+	'ноября',
+	'декабря',
 ];
 
 /**
- * День в заголовке карточки: «июль 04 2027» - месяц словом, число двумя
- * цифрами, год (просьба пользователя 14.11.2026). Дата приходит уже строгой
- * `ГГГГ-ММ-ДД`.
+ * День в заголовке карточки: «Суббота 14 июля» - день недели, число, месяц
+ * (просьба пользователя 14.11.2026; до этого «июль 04 2027»). Год - только если
+ * не текущий: «Понедельник 4 октября 2027», иначе дни разных лет не различить.
+ * Дата приходит уже строгой `ГГГГ-ММ-ДД`.
  */
 const cardDate = (date: string | null): string => {
 	if (!date) return 'Без даты';
 
 	const [year, month, day] = date.split('-');
+	const weekday = CARD_WEEKDAYS[moment(date, DATE_FORMAT, true).isoWeekday() - 1];
+	const text = `${weekday} ${Number(day)} ${CARD_MONTHS[Number(month) - 1]}`;
 
-	return `${CARD_MONTHS[Number(month) - 1]} ${day} ${year}`;
+	return year === todayStr.value.slice(0, 4) ? text : `${text} ${year}`;
 };
 
 /**
