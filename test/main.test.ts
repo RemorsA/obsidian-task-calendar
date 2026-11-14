@@ -160,7 +160,7 @@ describe('onload', () => {
 			['open-task-list', 'Открыть список задач'],
 		]);
 		expect(mock.ribbonIcons.map((icon) => [icon.icon, icon.title])).toEqual([
-			['calendar-check-2', 'Открыть список задач'],
+			['list-checks', 'Открыть список задач'],
 		]);
 		expect(mock.settingTabs).toHaveLength(1);
 	});
@@ -191,6 +191,7 @@ describe('onload', () => {
 		};
 
 		expect(describeView(VIEW_TYPE)).toEqual([VIEW_TYPE, 'Календарь задач', 'calendar']);
+		// Иконка вкладки - та же, что на левой панели.
 		expect(describeView(LIST_TYPE)).toEqual([LIST_TYPE, 'Список задач', 'list-checks']);
 	});
 

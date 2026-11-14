@@ -14,6 +14,7 @@ export class TaskListView extends VueView {
 		return 'Список задач';
 	}
 
+	/** Та же иконка, что на левой панели (просьба пользователя 14.11.2026). */
 	getIcon(): string {
 		return 'list-checks';
 	}
