@@ -26,8 +26,17 @@ import { moment, parseYaml } from 'obsidian';
 
 export const DATE_FORMAT = 'YYYY-MM-DD';
 
-/** `Дата и время` - так его пишет сам Obsidian, тип «Дата и время». */
+/**
+ * Даты задачи со временем - `Дата и время`, `Дата выполнения`, `Дата переноса`:
+ * так их пишет сам Obsidian, тип «Дата и время».
+ */
 export const DATE_TIME_FORMAT = 'YYYY-MM-DD[T]HH:mm:ss';
+
+/**
+ * Время в `Дата и время` новой задачи и следующего повтора - всегда 08:00
+ * (просьба пользователя 14.11.2026). Имя файла на даты не влияет.
+ */
+export const DEFAULT_TIME = '08:00:00';
 
 /** Свойства задачи - ровно так, как они называются в файле. */
 export const PROPS = {
@@ -42,15 +51,15 @@ export const PROPS = {
 
 /**
  * Типы свойств в панели свойств Obsidian. Пустое при создании свойство Obsidian
- * показал бы текстом: у «Дата переноса» не было бы выбора даты. Галочки
- * подзадач с номером в имени не перечислить - их `false` Obsidian и так
- * показывает флажком.
+ * показал бы текстом: у «Дата переноса» не было бы выбора даты. Все три даты -
+ * со временем (14.11.2026). Галочки подзадач с номером в имени не перечислить -
+ * их `false` Obsidian и так показывает флажком.
  */
 export const PROPERTY_TYPES: Record<string, string> = {
 	[PROPS.checked]: 'checkbox',
 	[PROPS.date]: 'datetime',
-	[PROPS.doneDate]: 'date',
-	[PROPS.move]: 'date',
+	[PROPS.doneDate]: 'datetime',
+	[PROPS.move]: 'datetime',
 };
 
 /** Номер подзадачи в имени свойства: путь [1, 2] - `1-2`. */
@@ -66,8 +75,6 @@ export const subtaskCheckedKey = (path: number[]): string => `Подзадача
  */
 const SUBTASK_KEY = /^Подзадача-(\d+(?:-\d+)*)(-выполнено)?$/;
 
-/** Строго YYYY-MM-DD: времени и таймзон формат не хранит. */
-const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 
 /** `ГГГГ-ММ-ДД`, `ГГГГ-ММ-ДДTЧЧ:ММ` или `ГГГГ-ММ-ДДTЧЧ:ММ:СС`, без таймзоны. */
 const DATE_TIME = /^(\d{4}-\d{2}-\d{2})(?:T(\d{2}:\d{2})(:\d{2})?)?$/;
@@ -111,11 +118,14 @@ export interface Task {
 	date: string | null;
 	/** `Дата и время` целиком, `ГГГГ-ММ-ДДTЧЧ:ММ:СС` - по нему порядок списка. */
 	dateTime: string | null;
-	/** `Дата выполнения` - есть она, значит задача выполнена. */
+	/**
+	 * `Дата выполнения`, `ГГГГ-ММ-ДДTЧЧ:ММ:СС` - момент выполнения; есть она,
+	 * значит задача выполнена.
+	 */
 	doneDate: string | null;
 	/** `Повтор` - текст как написан. Нераспознанный - задача без повтора. */
 	repeat: string | null;
-	/** `Дата переноса` - день, на который перенесли повторную задачу. */
+	/** `Дата переноса`, `ГГГГ-ММ-ДДTЧЧ:ММ:СС` - куда перенесли повторную задачу. */
 	move: string | null;
 	/** Подзадачи с текстом по порядку N. */
 	subtasks: Subtask[];
@@ -126,8 +136,8 @@ export interface NewTask {
 	/** `Задача`. Пусто - пустое свойство (шаблон для ручного заполнения). */
 	text: string;
 	/**
-	 * День `Дата и время`, `ГГГГ-ММ-ДД`. Время - момент создания файла, его ставит
-	 * запись (`buildTaskFile`), а не данные задачи.
+	 * День `Дата и время`, `ГГГГ-ММ-ДД`. Время - всегда `DEFAULT_TIME` (08:00), его
+	 * ставит запись (`buildTaskFile`).
 	 */
 	date: string | null;
 	repeat: string | null;
@@ -315,30 +325,12 @@ export const parseRepeat = (value: unknown): Repeat | null => {
 };
 
 /**
- * Значение свойства-даты. Всё, что не строгое YYYY-MM-DD, - null.
- *
- * Дата из YAML бывает и объектом `Date` (так её отдаёт парсер без схемы) - его
- * полночь в UTC, поэтому и формат берётся в UTC.
- */
-export const normalizeDate = (value: unknown): string | null => {
-	if (value instanceof Date) {
-		return Number.isNaN(value.getTime()) ? null : moment.utc(value).format(DATE_FORMAT);
-	}
-
-	if (typeof value !== 'string') return null;
-
-	const trimmed = value.trim();
-	if (!DATE_ONLY.test(trimmed)) return null;
-
-	return moment(trimmed, DATE_FORMAT, true).isValid() ? trimmed : null;
-};
-
-/**
- * Значение `Дата и время` строкой `ГГГГ-ММ-ДДTЧЧ:ММ:СС`. Obsidian пишет его с
+ * Значение свойства-даты со временем (`Дата и время`, `Дата выполнения`,
+ * `Дата переноса`) строкой `ГГГГ-ММ-ДДTЧЧ:ММ:СС`. Obsidian пишет его с
  * секундами, без секунд тоже читается; одна дата без времени (вписали руками
  * текстом) - полночь. Остальное - null.
  *
- * Объект `Date` из YAML (парсер без схемы) - время в UTC, как и у даты.
+ * Объект `Date` из YAML (парсер без схемы) - время в UTC.
  */
 export const normalizeDateTime = (value: unknown): string | null => {
 	if (value instanceof Date) {
@@ -602,9 +594,9 @@ export const readTask = (path: string, frontmatter: unknown): Task | null => {
 		checked: readFlag(props[PROPS.checked]),
 		date: dateTime?.slice(0, 10) ?? null,
 		dateTime,
-		doneDate: normalizeDate(props[PROPS.doneDate]),
+		doneDate: normalizeDateTime(props[PROPS.doneDate]),
 		repeat: readText(props[PROPS.repeat]),
-		move: normalizeDate(props[PROPS.move]),
+		move: normalizeDateTime(props[PROPS.move]),
 		subtasks: readSubtasks(props),
 	};
 };
@@ -662,10 +654,13 @@ export interface TaskState {
 
 export const stateOf = (task: Task): TaskState => ({ all: allChecked(task), move: task.move });
 
+/** День из даты со временем: `ГГГГ-ММ-ДДTЧЧ:ММ:СС` -> `ГГГГ-ММ-ДД`. */
+const dayOf = (dateTime: string | null): string | null => dateTime?.slice(0, 10) ?? null;
+
 /**
  * Данные файла следующего повтора: то же, что у задачи, галочки сняты. День -
  * по расчёту; время выполненной не переносится - в `Дата и время` встанет
- * момент создания файла (просьба пользователя 14.11.2026).
+ * `DEFAULT_TIME`, 08:00 (просьба пользователя 14.11.2026).
  */
 const nextTaskOf = (task: Task, date: string): NewTask => ({
 	text: task.text,
@@ -687,15 +682,15 @@ export interface Automation {
  *
  * | Переход | Что делается |
  * |---|---|
- * | не всё отмечено -> всё | `Дата выполнения` - сегодня; есть повтор - он очищается, нужен следующий файл |
+ * | не всё отмечено -> всё | `Дата выполнения` - момент выполнения `now`; есть повтор - он очищается, нужен следующий файл |
  * | всё -> снята любая галочка | `Дата выполнения` очищается, повтор не возвращается |
- * | `Дата переноса` появилась у невыполненной повторной | повтор очищается, день `Дата и время` - день переноса, нужен следующий файл |
+ * | `Дата переноса` появилась у невыполненной повторной | повтор очищается, `Дата и время` = `Дата переноса` целиком, нужен следующий файл |
  * | дыра в нумерации подзадач | перенумеровать подряд |
  *
  * Срабатывают только переходы относительно прошлого состояния `previous`:
  * правки, сделанные при выключенном плагине, не догоняются.
  */
-export const automate = (frontmatter: Frontmatter, previous: TaskState, today: string): Automation => {
+export const automate = (frontmatter: Frontmatter, previous: TaskState, now: string): Automation => {
 	const result: Automation = { changed: false, next: null };
 
 	if (hasNumberingGap(frontmatter)) {
@@ -710,10 +705,10 @@ export const automate = (frontmatter: Frontmatter, previous: TaskState, today: s
 	const all = allChecked(task);
 
 	if (all && !previous.all && task.doneDate === null) {
-		frontmatter[PROPS.doneDate] = today;
+		frontmatter[PROPS.doneDate] = now;
 		result.changed = true;
 
-		const date = repeat && task.date ? nextRepeatDate(task.date, repeat, task.move) : null;
+		const date = repeat && task.date ? nextRepeatDate(task.date, repeat, dayOf(task.move)) : null;
 
 		if (date) {
 			frontmatter[PROPS.repeat] = null;
@@ -733,13 +728,13 @@ export const automate = (frontmatter: Frontmatter, previous: TaskState, today: s
 
 	if (task.move !== null && previous.move === null && task.doneDate === null && repeat && task.date) {
 		// Следующий повтор - от исходного дня, до переноса.
-		const date = nextRepeatDate(task.date, repeat, task.move);
+		const date = nextRepeatDate(task.date, repeat, dayOf(task.move));
 
 		if (date) {
 			frontmatter[PROPS.repeat] = null;
-			// Сама задача переезжает на день переноса, время то же: день показа -
-			// только `Дата и время` (решение пользователя 14.11.2026).
-			frontmatter[PROPS.date] = `${task.move}T${task.dateTime?.slice(11) ?? '00:00:00'}`;
+			// Сама задача переезжает на `Дата переноса` целиком, с её временем: показ
+			// и порядок - только по `Дата и время` (решения пользователя 14.11.2026).
+			frontmatter[PROPS.date] = task.move;
 			result.changed = true;
 			result.next = nextTaskOf(task, date);
 		}
@@ -774,15 +769,15 @@ const yamlLine = (key: string, value: string | boolean | null): string =>
  * бы не то. Пустой текст - пустое `Задача:`: такой файл задачей не считается,
  * пока его не заполнят.
  *
- * `time` - время создания файла `ЧЧ:ММ:СС`: `Дата и время` = день задачи и это
- * время, у пустого шаблона и у следующего повтора одинаково.
+ * `Дата и время` = день задачи и `DEFAULT_TIME` (08:00) - у пустого шаблона и у
+ * следующего повтора одинаково.
  */
-export const buildTaskFile = (task: NewTask, time: string): string => {
+export const buildTaskFile = (task: NewTask): string => {
 	const lines = [
 		'---',
 		yamlLine(PROPS.text, task.text ? yamlString(task.text) : null),
 		yamlLine(PROPS.checked, false),
-		yamlLine(PROPS.date, task.date ? `${task.date}T${time}` : null),
+		yamlLine(PROPS.date, task.date ? `${task.date}T${DEFAULT_TIME}` : null),
 		yamlLine(PROPS.doneDate, null),
 		yamlLine(PROPS.repeat, task.repeat ? yamlString(task.repeat) : null),
 		yamlLine(PROPS.move, null),
@@ -850,6 +845,24 @@ export const compareByDateTime = (a: Task, b: Task): number => {
 	}
 
 	return compareByCreation(a, b);
+};
+
+/**
+ * Порядок группы «Выполнено» - только что выполненные сверху (просьба
+ * пользователя 14.11.2026): по `Дата выполнения`, новее выше. Она с точностью до
+ * минуты; выполненные в одну минуту - позже созданный файл выше. Без
+ * `Дата выполнения` - ниже всех: в группу такие не попадают, правило - для
+ * полноты.
+ */
+export const compareByDone = (a: Task, b: Task): number => {
+	if (a.doneDate !== b.doneDate) {
+		if (a.doneDate === null) return 1;
+		if (b.doneDate === null) return -1;
+
+		return a.doneDate > b.doneDate ? -1 : 1;
+	}
+
+	return compareByCreation(b, a);
 };
 
 /**

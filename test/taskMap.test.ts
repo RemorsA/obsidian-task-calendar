@@ -149,7 +149,7 @@ describe('индексация', () => {
 
 		await editFile(PATH, { checked: true });
 
-		expect(propsOf(PATH)?.['Дата выполнения']).toBe(TODAY);
+		expect(propsOf(PATH)?.['Дата выполнения']).toBe('2026-08-13T12:00:00');
 	});
 
 	it('кэш догнал файл (changed) - задача перечитывается, обычные заметки не читаются', async () => {
@@ -192,8 +192,8 @@ describe('автоматика при правке свойств', () => {
 
 		await editFile(PATH, { checked: true });
 
-		expect(propsOf(PATH)).toMatchObject({ Выполнено: true, 'Дата выполнения': TODAY });
-		expect(map.byPath(PATH)?.doneDate).toBe(TODAY);
+		expect(propsOf(PATH)).toMatchObject({ Выполнено: true, 'Дата выполнения': '2026-08-13T12:00:00' });
+		expect(map.byPath(PATH)?.doneDate).toBe('2026-08-13T12:00:00');
 	});
 
 	it('отмечена задача, но не подзадача - даты выполнения нет', async () => {
@@ -235,14 +235,14 @@ describe('автоматика при правке свойств', () => {
 			subtasks: [['Налить воды', true]],
 		});
 
-		expect(propsOf(PATH)).toMatchObject({ 'Дата выполнения': TODAY, Повтор: null });
-		// Рядом с выполненным, а не в папке из настроек; время - момент создания
-		// файла (12:00 по часам теста), а не 07:30 выполненного.
+		expect(propsOf(PATH)).toMatchObject({ 'Дата выполнения': '2026-08-13T12:00:00', Повтор: null });
+		// Рядом с выполненным, а не в папке из настроек; время - всегда 08:00, а не
+		// 07:30 выполненного и не время создания файла (12:00 по часам теста).
 		expect(vault.contentOf(`Задачи/${NOW_NAME}.md`)).toBe([
 			'---',
 			'Задача: Полить фикус',
 			'Выполнено: false',
-			'Дата и время: 2026-08-16T12:00:00',
+			'Дата и время: 2026-08-16T08:00:00',
 			'Дата выполнения:',
 			'Повтор: Каждую неделю Суббота, Воскресенье',
 			'Дата переноса:',
@@ -253,7 +253,7 @@ describe('автоматика при правке свойств', () => {
 		].join('\n'));
 		expect(map.byPath(`Задачи/${NOW_NAME}.md`)).toMatchObject({
 			date: '2026-08-16',
-			dateTime: '2026-08-16T12:00:00',
+			dateTime: '2026-08-16T08:00:00',
 			repeat: 'Каждую неделю Суббота, Воскресенье',
 		});
 	});
@@ -272,26 +272,27 @@ describe('автоматика при правке свойств', () => {
 	it('вписали дату переноса повторной - повтор очищается, задача переезжает на этот день, следующий файл - от исходного', async () => {
 		await setup({ files: { [PATH]: taskFileText({ date: '2026-08-15T08:00:00', repeat: 'Каждую неделю Суббота' }) } });
 
-		await editFile(PATH, { date: '2026-08-15T08:00:00', move: '2026-08-17', repeat: 'Каждую неделю Суббота' });
+		await editFile(PATH, { date: '2026-08-15T08:00:00', move: '2026-08-17T19:30:00', repeat: 'Каждую неделю Суббота' });
 
-		expect(propsOf(PATH)).toMatchObject({ 'Дата и время': '2026-08-17T08:00:00', 'Дата переноса': '2026-08-17', Повтор: null });
-		// День - по расчёту от исходного, время - момент создания файла.
+		// «Дата переноса» целиком - в «Дата и время».
+		expect(propsOf(PATH)).toMatchObject({ 'Дата и время': '2026-08-17T19:30:00', 'Дата переноса': '2026-08-17T19:30:00', Повтор: null });
+		// День - по расчёту от исходного, время - 08:00.
 		expect(propsOf(`Задачи/${NOW_NAME}.md`)).toMatchObject({
-			'Дата и время': '2026-08-22T12:00:00',
+			'Дата и время': '2026-08-22T08:00:00',
 			Повтор: 'Каждую неделю Суббота',
 			'Дата переноса': null,
 		});
-		expect(map.byPath(PATH)).toMatchObject({ date: '2026-08-17', move: '2026-08-17', repeat: null });
+		expect(map.byPath(PATH)).toMatchObject({ date: '2026-08-17', dateTime: '2026-08-17T19:30:00', move: '2026-08-17T19:30:00', repeat: null });
 	});
 
 	it('дата переноса у обычной задачи файл не трогает', async () => {
 		await setup({ files: { [PATH]: taskFileText() } });
 
-		await editFile(PATH, { move: '2026-08-20' });
+		await editFile(PATH, { move: '2026-08-20T10:00:00' });
 
 		expect(app.fileManager.calls).toHaveLength(0);
 		expect(vault.paths()).toEqual([PATH]);
-		expect(map.byPath(PATH)?.move).toBe('2026-08-20');
+		expect(map.byPath(PATH)?.move).toBe('2026-08-20T10:00:00');
 	});
 
 	it('удалили подзадачу из середины - остальные перенумеровываются', async () => {
@@ -362,9 +363,18 @@ describe('галочка из карточки', () => {
 
 		await map.toggle(PATH, 0);
 
-		expect(propsOf(PATH)).toMatchObject({ Выполнено: true, 'Дата выполнения': TODAY });
+		expect(propsOf(PATH)).toMatchObject({ Выполнено: true, 'Дата выполнения': '2026-08-13T12:00:00' });
 		// Карта сведена сразу, без ожидания событий хранилища.
-		expect(map.byPath(PATH)?.doneDate).toBe(TODAY);
+		expect(map.byPath(PATH)?.doneDate).toBe('2026-08-13T12:00:00');
+	});
+
+	it('дата выполнения - с точностью до минуты, секунды всегда :00', async () => {
+		useFixedClock(`${TODAY}T21:30:45`);
+		await setup({ files: { [PATH]: taskFileText({ text: 'Дело' }) } });
+
+		await map.toggle(PATH, 0);
+
+		expect(propsOf(PATH)?.['Дата выполнения']).toBe('2026-08-13T21:30:00');
 	});
 
 	it('галочка подзадачи пишет её «-выполнено»', async () => {
@@ -387,7 +397,7 @@ describe('галочка из карточки', () => {
 
 		await map.toggle(PATH, 1);
 
-		expect(propsOf(PATH)).toMatchObject({ 'Дата выполнения': TODAY, Повтор: null });
+		expect(propsOf(PATH)).toMatchObject({ 'Дата выполнения': '2026-08-13T12:00:00', Повтор: null });
 		expect(map.byPath(`Задачи/${NOW_NAME}.md`)).toMatchObject({
 			date: '2026-08-14',
 			repeat: 'Каждый день',
@@ -443,7 +453,7 @@ describe('галочка из карточки', () => {
 });
 
 describe('новая задача - пустой шаблон', () => {
-	it('файл ГГГГММДД_ЧЧММСС.md в папке из настроек, «Дата и время» - сейчас, остальное пустое, задачей пока не считается', async () => {
+	it('файл ГГГГММДД_ЧЧММСС.md в папке из настроек, «Дата и время» - сегодня 08:00, остальное пустое, задачей пока не считается', async () => {
 		await setup({ folders: ['Задачи'], tasksFolderPath: '/Задачи/' });
 
 		const path = await map.createBlankTask();
@@ -453,7 +463,7 @@ describe('новая задача - пустой шаблон', () => {
 			'---',
 			'Задача:',
 			'Выполнено: false',
-			'Дата и время: 2026-08-13T12:00:00',
+			'Дата и время: 2026-08-13T08:00:00',
 			'Дата выполнения:',
 			'Повтор:',
 			'Дата переноса:',

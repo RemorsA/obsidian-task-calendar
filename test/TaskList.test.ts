@@ -22,9 +22,16 @@ const mountList = async (options: PluginDoubleOptions = {}) => {
 	return { wrapper, ...context };
 };
 
-/** Карточки подряд: тексты тел сверху вниз - групп в списке нет. */
+/** Карточки задач сверху вниз, без группы «Выполнено». */
 const cardTexts = (wrapper: VueWrapper): string[] =>
-	wrapper.findAll('.tasks__item-body').map((body) => body.text().trim());
+	wrapper.findAll('.task__calendar-list-section.--is-tasks .tasks__item-body').map((body) => body.text().trim());
+
+/** Группа «Выполнено». */
+const doneGroup = (wrapper: VueWrapper) => wrapper.find('.task__calendar-list-section.--is-done');
+
+/** Карточки группы «Выполнено» сверху вниз. */
+const doneTexts = (wrapper: VueWrapper): string[] =>
+	doneGroup(wrapper).findAll('.tasks__item-body').map((body) => body.text().trim());
 
 /** Модификаторы карточек сверху вниз. */
 const modifiers = (wrapper: VueWrapper): string[][] =>
@@ -65,7 +72,7 @@ describe('свитч включён: 100 ближайших невыполнен
 		expect(wrapper.find('h2').exists()).toBe(false);
 	});
 
-	it('выполненные в списке не показываются', async () => {
+	it('выполненные - не в списке, а в группе «Выполнено» под ним', async () => {
 		const { wrapper } = await mountOpenList({
 			files: {
 				'1.md': taskFileText({ text: 'Открытая' }),
@@ -75,6 +82,9 @@ describe('свитч включён: 100 ближайших невыполнен
 		});
 
 		expect(cardTexts(wrapper)).toEqual(['Открытая']);
+		expect(doneTexts(wrapper)).toEqual(['Сделано сегодня', 'Сделано давно']);
+		expect(wrapper.findAll('.task__calendar-list-section').map((section) => section.classes()))
+			.toEqual([expect.arrayContaining(['--is-tasks']), expect.arrayContaining(['--is-done'])]);
 	});
 
 	it('пустой список и список из одних выполненных так и говорят', async () => {
@@ -83,6 +93,7 @@ describe('свитч включён: 100 ближайших невыполнен
 
 		const done = await mountOpenList({ files: { '1.md': taskFileText({ checked: true, doneDate: TODAY }) } });
 		expect(done.wrapper.find('.task__calendar-list-empty').text()).toBe('Задач нет');
+		expect(doneTexts(done.wrapper)).toEqual(['Задача']);
 	});
 
 	it('просроченные первыми отдельным правилом; «Дата переноса» на просрочку и место не влияет', async () => {
@@ -137,6 +148,132 @@ describe('свитч включён: 100 ближайших невыполнен
 		});
 
 		expect(cardTexts(wrapper)).toEqual(['Создана раньше', 'Создана позже', 'Без даты']);
+	});
+});
+
+describe('свитч включён: группа «Выполнено»', () => {
+	/** Выполненная задача: время выполнения - с точностью до минуты, как пишет плагин. */
+	const done = (text: string, doneDate: string, date = '2026-08-01T08:00:00') =>
+		taskFileText({ text, date, checked: true, doneDate });
+
+	it('под списком, заголовок - кнопка со стрелкой и числом; только что выполненные сверху', async () => {
+		const { wrapper } = await mountOpenList({
+			files: {
+				'20260801_090000.md': done('Вчера', '2026-08-12T18:00:00', '2026-08-20T08:00:00'),
+				'20260802_090000.md': done('Только что', `${TODAY}T11:59:00`),
+				'20260803_090000.md': done('Утром', `${TODAY}T08:30:00`),
+				'20260804_090000.md': done('Давно', '2025-01-01T08:00:00'),
+				'20260805_090000.md': taskFileText({ text: 'Открытая' }),
+			},
+		});
+
+		const heading = doneGroup(wrapper).find('h2.task__calendar-group-heading');
+		const toggle = heading.find('button.task__calendar-group-toggle');
+
+		expect(toggle.find('.task__calendar-group-arrow').exists()).toBe(true);
+		expect(toggle.find('.task__calendar-group-title').text()).toBe('Выполнено');
+		expect(toggle.find('.task__calendar-group-count').text()).toBe('4');
+		expect(toggle.attributes('aria-expanded')).toBe('true');
+		expect(doneTexts(wrapper)).toEqual(['Только что', 'Утром', 'Вчера', 'Давно']);
+		// День в заголовке карточки - день задачи, как в списке.
+		expect(doneGroup(wrapper).findAll('.tasks__item-date').map((date) => date.text()))
+			.toEqual(['Суббота 1 августа', 'Суббота 1 августа', 'Четверг 20 августа', 'Суббота 1 августа']);
+		expect(doneGroup(wrapper).findAll('.tasks__item').every((item) => item.classes('--is-done'))).toBe(true);
+	});
+
+	it('видно не больше 20 - только что выполненные; число в заголовке - все выполненные', async () => {
+		const files: Record<string, string> = {};
+		for (let i = 0; i < 25; i++) {
+			const moment = momentLib('2026-07-01T08:00:00').add(i, 'hour').format('YYYY-MM-DD[T]HH:mm:ss');
+			files[`${i}.md`] = done(`Сделано ${i}`, moment);
+		}
+
+		const { wrapper } = await mountOpenList({ files });
+		const texts = doneTexts(wrapper);
+
+		expect(texts).toHaveLength(20);
+		expect(texts[0]).toBe('Сделано 24');
+		expect(texts[19]).toBe('Сделано 5');
+		expect(doneGroup(wrapper).find('.task__calendar-group-count').text()).toBe('25');
+	});
+
+	it('выполненные в одну минуту - позже созданный файл выше', async () => {
+		const { wrapper } = await mountOpenList({
+			files: {
+				'20260801_090000.md': done('Создана раньше', `${TODAY}T10:00:00`),
+				'20260805_090000.md': done('Создана позже', `${TODAY}T10:00:00`),
+			},
+		});
+
+		expect(doneTexts(wrapper)).toEqual(['Создана позже', 'Создана раньше']);
+	});
+
+	it('сворачивается заголовком: карточки остаются, но недоступны; состояние - в настройках', async () => {
+		const { wrapper, plugin } = await mountOpenList({ files: { 'a.md': done('Сделано', `${TODAY}T10:00:00`) } });
+		const toggle = () => doneGroup(wrapper).find('.task__calendar-group-toggle');
+		const body = () => doneGroup(wrapper).find('.task__calendar-list-section-body');
+
+		expect(body().attributes('inert')).toBeUndefined();
+
+		await toggle().trigger('click');
+		await flushPromises();
+
+		expect(doneGroup(wrapper).classes()).toContain('--is-collapsed');
+		expect(toggle().attributes('aria-expanded')).toBe('false');
+		expect(body().attributes()).toHaveProperty('inert');
+		expect(doneTexts(wrapper)).toEqual(['Сделано']);
+		expect(doneGroup(wrapper).find('.task__calendar-group-count').text()).toBe('1');
+		expect(plugin.settings.doneCollapsed).toBe(true);
+		expect(plugin.saveSettings).toHaveBeenCalledTimes(1);
+
+		await toggle().trigger('click');
+		await flushPromises();
+
+		expect(doneGroup(wrapper).classes()).not.toContain('--is-collapsed');
+		expect(body().attributes('inert')).toBeUndefined();
+		expect(plugin.settings.doneCollapsed).toBe(false);
+	});
+
+	it('свёрнутая в настройках остаётся свёрнутой', async () => {
+		const { wrapper } = await mountOpenList({
+			doneCollapsed: true,
+			files: { 'a.md': done('Сделано', `${TODAY}T10:00:00`) },
+		});
+
+		expect(doneGroup(wrapper).classes()).toContain('--is-collapsed');
+		expect(doneGroup(wrapper).find('.task__calendar-group-toggle').attributes('aria-expanded')).toBe('false');
+	});
+
+	it('подчёркивание заголовка - отдельный элемент под кнопкой, а не её рамка', async () => {
+		const { wrapper } = await mountOpenList({ files: { 'a.md': done('Сделано', `${TODAY}T10:00:00`) } });
+		const heading = doneGroup(wrapper).find('.task__calendar-group-heading');
+
+		expect(heading.find('.task__calendar-group-line').attributes('aria-hidden')).toBe('true');
+		expect(heading.find('.task__calendar-group-toggle .task__calendar-group-line').exists()).toBe(false);
+	});
+
+	it('снятая галочка в группе возвращает задачу в список', async () => {
+		const { wrapper, vault } = await mountOpenList({ files: { 'a.md': done('Сделано', `${TODAY}T10:00:00`) } });
+
+		await doneGroup(wrapper).find('input.task-list-item-checkbox').trigger('click');
+		await flushPromises();
+
+		expect(parseFrontmatter(vault.contentOf('a.md') ?? '')).toMatchObject({ Выполнено: false, 'Дата выполнения': null });
+		expect(cardTexts(wrapper)).toEqual(['Сделано']);
+		expect(doneGroup(wrapper).exists()).toBe(false);
+	});
+
+	it('в режиме дня группы нет: выполненные дня - в конце дня', async () => {
+		const { wrapper } = await mountList({
+			files: {
+				'a.md': taskFileText({ text: 'Открытая' }),
+				'b.md': done('Сделано', `${TODAY}T10:00:00`, `${TODAY}T08:00:00`),
+			},
+		});
+
+		expect(doneGroup(wrapper).exists()).toBe(false);
+		expect(wrapper.find('h2').exists()).toBe(false);
+		expect(cardTexts(wrapper)).toEqual(['Открытая', 'Сделано']);
 	});
 });
 
@@ -217,7 +354,7 @@ describe('карточка', () => {
 		expect(Notice.messages).toContain('Не удалось открыть задачу');
 	});
 
-	it('галочка задачи закрывает её, и карточка уходит из списка', async () => {
+	it('галочка задачи закрывает её, и карточка уходит из списка в «Выполнено»', async () => {
 		const { wrapper, vault } = await mountOpenList({ files: { [PATH]: taskFileText({ text: 'Дело' }) } });
 
 		await wrapper.find('input.task-list-item-checkbox').trigger('click');
@@ -225,9 +362,10 @@ describe('карточка', () => {
 
 		expect(parseFrontmatter(vault.contentOf(PATH) ?? '')).toMatchObject({
 			Выполнено: true,
-			'Дата выполнения': TODAY,
+			'Дата выполнения': '2026-08-13T12:00:00',
 		});
 		expect(cardTexts(wrapper)).toEqual([]);
+		expect(doneTexts(wrapper)).toEqual(['Дело']);
 	});
 
 	it('на телефоне галочка отзывается вибрацией сразу, на компьютере - нет', async () => {
@@ -310,7 +448,8 @@ describe('карточка', () => {
 		await flushPromises();
 
 		expect(cardTexts(wrapper)).toEqual(['Полить фикус']);
-		expect(wrapper.find('.tasks__item-date').text()).toBe('Пятница 14 августа');
+		expect(wrapper.find('.task__calendar-list-section.--is-tasks .tasks__item-date').text()).toBe('Пятница 14 августа');
+		expect(doneTexts(wrapper)).toEqual(['Полить фикус']);
 	});
 
 	it('снятая галочка возвращает выполненную в список', async () => {
@@ -343,7 +482,7 @@ describe('кнопка новой задачи', () => {
 		expect(wrapper.findAll('textarea, input:not([type="checkbox"])')).toHaveLength(0);
 	});
 
-	it('создаёт файл с текущими датой и временем, остальное пустое, и сразу открывает его на правку', async () => {
+	it('создаёт файл с сегодняшним днём и 08:00, остальное пустое, и сразу открывает его на правку', async () => {
 		const { wrapper, vault, app } = await mountList({ tasksFolderPath: '/Задачи', folders: ['Задачи'] });
 
 		await wrapper.find('.task__calendar-create-open').trigger('click');
@@ -353,7 +492,7 @@ describe('кнопка новой задачи', () => {
 		expect(parseFrontmatter(vault.contentOf(path) ?? '')).toEqual({
 			Задача: null,
 			Выполнено: false,
-			'Дата и время': '2026-08-13T12:00:00',
+			'Дата и время': '2026-08-13T08:00:00',
 			'Дата выполнения': null,
 			Повтор: null,
 			'Дата переноса': null,
@@ -483,11 +622,15 @@ describe('режим дня: свитч выключен (по умолчани�
 		expect(app.workspace.openLinkCalls.map((call) => call.linktext)).toEqual(['b.md']);
 	});
 
-	it('пустой день - без плашки, только календарь', async () => {
-		const { wrapper } = await mountList();
+	it('пустой день - «Задач нет», как и пустой список при включённом свитче', async () => {
+		const { wrapper } = await mountList({ files: { 'a.md': taskFileText({ text: 'Дело' }) } });
+
+		expect(wrapper.find('.task__calendar-list-empty').exists()).toBe(false);
+
+		await selectDay(wrapper, '2026-08-20');
 
 		expect(wrapper.find('.task__calendar-container').exists()).toBe(true);
-		expect(wrapper.find('.task__calendar-list-empty').exists()).toBe(false);
+		expect(wrapper.find('.task__calendar-list-empty').text()).toBe('Задач нет');
 		expect(wrapper.findAll('.tasks__item')).toHaveLength(0);
 	});
 
@@ -519,14 +662,14 @@ describe('режим дня: свитч выключен (по умолчани�
 		expect(cardTexts(wrapper)).toEqual(['Двадцатое']);
 	});
 
-	it('кнопка новой задачи та же: «Дата и время» - сейчас, выбранный день на него не влияет', async () => {
+	it('кнопка новой задачи та же: «Дата и время» - сегодня 08:00, выбранный день на него не влияет', async () => {
 		const { wrapper, vault, app } = await mountList({ tasksFolderPath: '/' });
 
 		await selectDay(wrapper, '2026-08-20');
 		await wrapper.find('.task__calendar-create-open').trigger('click');
 		await flushPromises();
 
-		expect(parseFrontmatter(vault.contentOf(`${NOW_NAME}.md`) ?? '')?.['Дата и время']).toBe(`${TODAY}T12:00:00`);
+		expect(parseFrontmatter(vault.contentOf(`${NOW_NAME}.md`) ?? '')?.['Дата и время']).toBe(`${TODAY}T08:00:00`);
 		expect(app.workspace.openLinkCalls.map((call) => call.linktext)).toEqual([`${NOW_NAME}.md`]);
 	});
 

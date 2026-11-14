@@ -27,9 +27,16 @@ export type TaskCalendarSettings = {
 	 * прежним, чтобы значение из data.json подхватилось без миграции.
 	 */
 	calendarInList: boolean;
+	/**
+	 * Группа «Выполнено» под списком со свитчем свёрнута (просьба пользователя
+	 * 14.11.2026). Хранится здесь, чтобы пережить перезапуск; в настройках
+	 * переключателя нет - сворачивают заголовком группы.
+	 */
+	doneCollapsed: boolean;
 };
 
 export const DEFAULT_SETTINGS: TaskCalendarSettings = {
 	tasksFolderPath: '/',
 	calendarInList: false,
+	doneCollapsed: false,
 };

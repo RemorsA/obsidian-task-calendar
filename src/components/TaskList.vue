@@ -5,7 +5,7 @@
 			календаря больше нет). Режим задаёт свитч «Календарь в списке»: выключен -
 			клик по дню выбирает его, под календарём задачи выбранного дня; включён -
 			день не выбирается (без selectedDate ячейки не кнопки), под календарём
-			100 ближайших невыполненных задач.
+			100 ближайших невыполненных задач и группа «Выполнено».
 		-->
 		<TaskCalendar
 			:plugin="props.plugin"
@@ -21,59 +21,109 @@
 		</div>
 
 		<!--
-			Пустой день ничего не пишет (просьба пользователя 13.11.2026): точек в
-			календаре на нём и так нет.
+			Нечего показать - «Задач нет», в обоих режимах: и пустой выбранный день,
+			и пустой список при включённом свитче (просьба пользователя 14.11.2026;
+			с 13.11 пустой день ничего не писал).
 		-->
 		<div
-			v-else-if="!isDayMode && shownTasks.length === 0"
+			v-else-if="shownTasks.length === 0"
 			class="task__calendar-list-empty"
 		>
 			Задач нет
 		</div>
 
 		<!--
-			Карточки одним списком, без групп: задачи выбранного дня (`dayTasks`) или
-			100 ближайших невыполненных (`openTasks`).
+			Карточки разделами (`sections`): сначала задачи без заголовка - выбранного
+			дня (`dayTasks`) или 100 ближайших невыполненных (`openTasks`); при
+			включённом свитче под ними группа «Выполнено» (просьба пользователя
+			14.11.2026: из прежних групп вернули только её).
+
+			«Выполнено» сворачивается: заголовок - кнопка со стрелкой, число задач
+			видно и у свёрнутой. Карточки свёрнутой группы остаются в разметке - иначе
+			плавно схлопывать было бы нечего, - но недоступны: inert убирает их из
+			фокуса и клика. У развёрнутой атрибута нет вовсе (undefined, а не false):
+			там, где у элемента нет свойства inert, Vue написал бы inert="false", а
+			атрибут работает при любом значении.
 		-->
-		<div
-			v-if="shownTasks.length > 0"
-			class="task__calendar-list-cards"
+		<section
+			v-for="section in sections"
+			:key="section.id"
+			:class="['task__calendar-list-section', `--is-${section.id}`, section.collapsed && '--is-collapsed']"
 		>
-			<article
-				v-for="task in shownTasks"
-				:key="task.path"
-				:class="['tasks__item', modifierOf(task)]"
+			<h2
+				v-if="section.title"
+				class="task__calendar-group-heading"
+			>
+				<button
+					class="task__calendar-group-toggle task__calendar-default-button"
+					type="button"
+					:aria-expanded="!section.collapsed"
+					@click="handleToggleDone"
+				>
+					<svg class="task__calendar-group-arrow" xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 1024 1024"><!-- Icon from Element Plus by Element Plus - https://github.com/element-plus/element-plus-icons/blob/main/packages/svg/package.json --><path fill="currentColor" d="M104.7 338.8a64 64 0 0 1 90.5 0L512 655.6l316.8-316.8a64 64 0 0 1 90.5 90.4l-362 362.1a64 64 0 0 1-90.5 0l-362.1-362a64 64 0 0 1 0-90.5"/></svg>
+
+					<span class="task__calendar-group-title">{{ section.title }}</span>
+
+					<span class="task__calendar-group-count">{{ section.count }}</span>
+				</button>
+
+				<!--
+					Подчёркивание - отдельный элемент, а не рамка кнопки (просьба
+					пользователя 14.11.2026): скругление кнопки загибало линию по краям.
+				-->
+				<span
+					class="task__calendar-group-line"
+					aria-hidden="true"
+				/>
+			</h2>
+
+			<div
+				class="task__calendar-list-section-body"
+				:inert="section.collapsed || undefined"
 			>
 				<!--
-					В задачах дня дня в заголовке карточки нет (просьба пользователя
-					13.11.2026): день выбран в календаре. Кнопка редактирования
-					остаётся.
+					--i - номер карточки в разделе: при разворачивании «Выполнено»
+					карточки появляются по очереди, с задержкой по номеру.
 				-->
-				<header class="tasks__item-header">
-					<span
-						v-if="!isDayMode"
-						class="tasks__item-date"
+				<div class="task__calendar-list-cards">
+					<article
+						v-for="(task, i) in section.tasks"
+						:key="task.path"
+						:class="['tasks__item', modifierOf(task)]"
+						:style="{ '--i': i }"
 					>
-						{{ cardDate(showDate(task)) }}
-					</span>
+						<!--
+							В задачах дня дня в заголовке карточки нет (просьба пользователя
+							13.11.2026): день выбран в календаре. Кнопка редактирования
+							остаётся.
+						-->
+						<header class="tasks__item-header">
+							<span
+								v-if="!isDayMode"
+								class="tasks__item-date"
+							>
+								{{ cardDate(showDate(task)) }}
+							</span>
 
-					<button
-						class="task__calendar-default-button tasks__item-edit-button"
-						aria-label="Редактировать задачу"
-						@click="handleClickEdit(task)"
-					>
-						<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 1024 1024"><!-- Icon from Element Plus by Element Plus - https://github.com/element-plus/element-plus-icons/blob/main/packages/svg/package.json --><path fill="currentColor" d="m199 672.6l194 112l224-388l-193.9-112l-224 388.1zm-23.8 60.2L208 881.1l145-45.7zM455 229.2l194 112l56.7-98l-194-112zM104.3 708.8l384-665l304.8 176l-384 665h.1l-248.4 78.3zm384 254.3v-64h448v64z"/></svg>
-					</button>
-				</header>
+							<button
+								class="task__calendar-default-button tasks__item-edit-button"
+								aria-label="Редактировать задачу"
+								@click="handleClickEdit(task)"
+							>
+								<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 1024 1024"><!-- Icon from Element Plus by Element Plus - https://github.com/element-plus/element-plus-icons/blob/main/packages/svg/package.json --><path fill="currentColor" d="m199 672.6l194 112l224-388l-193.9-112l-224 388.1zm-23.8 60.2L208 881.1l145-45.7zM455 229.2l194 112l56.7-98l-194-112zM104.3 708.8l384-665l304.8 176l-384 665h.1l-248.4 78.3zm384 254.3v-64h448v64z"/></svg>
+							</button>
+						</header>
 
-				<TaskBody
-					:app="props.plugin.app"
-					:markdown="bodyOf(task)"
-					:source-path="task.path"
-					@toggle-checkbox="handleToggle(task, $event)"
-				/>
-			</article>
-		</div>
+						<TaskBody
+							:app="props.plugin.app"
+							:markdown="bodyOf(task)"
+							:source-path="task.path"
+							@toggle-checkbox="handleToggle(task, $event)"
+						/>
+					</article>
+				</div>
+			</div>
+		</section>
 
 		<!--
 			Новая задача (просьба пользователя 14.11.2026, вместо окна с полями):
@@ -100,6 +150,7 @@ import TaskCalendar from './TaskCalendar.vue';
 import { vibrate } from '../haptics';
 import {
 	compareByDateTime,
+	compareByDone,
 	compareOverdueFirst,
 	DATE_FORMAT,
 	isOverdue,
@@ -131,8 +182,8 @@ const LIST_LIMIT = 100;
 /**
  * Невыполненные задачи: просроченные первыми, дальше по `Дата и время`, раньше
  * выше - сверху ближайшие; не больше `LIST_LIMIT` (просьба пользователя
- * 14.11.2026). Выполненные не показываются - их тысячи; они остаются в файлах и
- * в днях календаря.
+ * 14.11.2026). Выполненные - не здесь, а в группе «Выполнено» под ними
+ * (`doneTasks`).
  */
 const openTasks = computed<Task[]>(() =>
 	tasks.value
@@ -204,6 +255,71 @@ const dayTasks = computed<Task[]>(() => {
 const shownTasks = computed<Task[]>(() =>
 	isDayMode.value ? dayTasks.value : openTasks.value
 );
+
+/**
+ * Сколько карточек видно в «Выполнено» (просьба пользователя 14.11.2026): только
+ * что выполненные. Число в заголовке - все выполненные задачи, любой давности
+ * (решение пользователя 13.11.2026).
+ */
+const DONE_SHOWN = 20;
+
+/**
+ * Все выполненные, только что выполненные сверху (`compareByDone`). Только при
+ * включённом свитче: в режиме дня выполненные идут в конце дня, без группы.
+ */
+const doneTasks = computed<Task[]>(() =>
+	isDayMode.value
+		? []
+		: tasks.value.filter((task) => task.doneDate !== null).sort(compareByDone)
+);
+
+/**
+ * Группа «Выполнено» свёрнута. Хранится в настройках плагина, чтобы пережить
+ * перезапуск; настройки Vue не отслеживает, поэтому здесь своя реактивная копия.
+ */
+const doneCollapsed = ref(props.plugin.settings.doneCollapsed);
+
+const handleToggleDone = async (): Promise<void> => {
+	doneCollapsed.value = !doneCollapsed.value;
+
+	props.plugin.settings.doneCollapsed = doneCollapsed.value;
+	await props.plugin.saveSettings();
+};
+
+interface Section {
+	id: 'tasks' | 'done';
+	/** Заголовок раздела; у задач без группы его нет. */
+	title: string | null;
+	/** Число в заголовке. */
+	count: number;
+	tasks: Task[];
+	collapsed: boolean;
+}
+
+/**
+ * Разделы списка сверху вниз: задачи (выбранного дня или ближайшие
+ * невыполненные), под ними при включённом свитче - «Выполнено». Пустые не
+ * показываются: нечего показать - над ними «Задач нет».
+ */
+const sections = computed<Section[]>(() => {
+	const list: Section[] = [];
+
+	if (shownTasks.value.length > 0) {
+		list.push({ id: 'tasks', title: null, count: shownTasks.value.length, tasks: shownTasks.value, collapsed: false });
+	}
+
+	if (doneTasks.value.length > 0) {
+		list.push({
+			id: 'done',
+			title: 'Выполнено',
+			count: doneTasks.value.length,
+			tasks: doneTasks.value.slice(0, DONE_SHOWN),
+			collapsed: doneCollapsed.value,
+		});
+	}
+
+	return list;
+});
 
 /**
  * Вид карточки: красная рамка у просроченной, свой вид у выполненной. По самой
@@ -338,6 +454,7 @@ onMounted(async () => {
 	});
 	unsubscribeSettings = props.plugin.onSettingsChange(() => {
 		calendarInList.value = props.plugin.settings.calendarInList;
+		doneCollapsed.value = props.plugin.settings.doneCollapsed;
 	});
 
 	tasks.value = taskMap.all();

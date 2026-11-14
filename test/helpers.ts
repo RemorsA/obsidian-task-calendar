@@ -78,6 +78,8 @@ export interface PluginDoubleOptions {
 	tasksFolderPath?: string;
 	/** Календарь в списке. По умолчанию выключен, как у плагина. */
 	calendarInList?: boolean;
+	/** Группа «Выполнено» свёрнута. По умолчанию нет, как у плагина. */
+	doneCollapsed?: boolean;
 }
 
 export interface PluginDouble {
@@ -98,13 +100,14 @@ export const createPluginDouble = ({
 	folders = [],
 	tasksFolderPath = '/',
 	calendarInList = DEFAULT_SETTINGS.calendarInList,
+	doneCollapsed = DEFAULT_SETTINGS.doneCollapsed,
 }: PluginDoubleOptions = {}): PluginDouble => {
 	const app = new App(new Vault(files, folders));
 	const settingsListeners = new Set<() => void>();
 
 	const plugin = {
 		app,
-		settings: { tasksFolderPath, calendarInList },
+		settings: { tasksFolderPath, calendarInList, doneCollapsed },
 		saveSettings: vi.fn(async () => {
 			for (const listener of settingsListeners) listener();
 		}),

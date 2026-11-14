@@ -63,7 +63,7 @@ describe('настройки', () => {
 
 		await plugin.loadSettings();
 
-		const expected = { tasksFolderPath: 'Задачи', calendarInList: false };
+		const expected = { tasksFolderPath: 'Задачи', calendarInList: false, doneCollapsed: false };
 		expect(plugin.settings).toEqual(expected);
 		// И обратно в файл они уже не уезжают.
 		expect(mock.savedData).toEqual(expected);
@@ -89,6 +89,21 @@ describe('настройки', () => {
 		const text = createPlugin({ calendarInList: 'да' });
 		await text.plugin.loadSettings();
 		expect(text.plugin.settings.calendarInList).toBe(false);
+	});
+
+	it('«Выполнено» по умолчанию развёрнута, сохранённое важнее, не булево - умолчание', async () => {
+		const fresh = createPlugin(null);
+		await fresh.plugin.loadSettings();
+		expect(fresh.plugin.settings.doneCollapsed).toBe(false);
+
+		const saved = createPlugin({ doneCollapsed: true });
+		await saved.plugin.loadSettings();
+		expect(saved.plugin.settings.doneCollapsed).toBe(true);
+
+		// Прежняя настройка свёрнутых групп - чужой ключ, на группу не влияет.
+		const old = createPlugin({ collapsedGroups: ['done'] });
+		await old.plugin.loadSettings();
+		expect(old.plugin.settings.doneCollapsed).toBe(false);
 	});
 
 	it('saveSettings сообщает подписчикам о смене настроек, после отписки - нет', async () => {
@@ -352,7 +367,7 @@ describe('карта задач', () => {
 		expect(app.vault.handlerCount('rename')).toBe(1);
 	});
 
-	it('onLayoutReady назначает типы свойств: «Дата и время» - датой со временем, даты - датой, галочка - флажком', async () => {
+	it('onLayoutReady назначает типы свойств: все три даты - датой со временем, галочка - флажком', async () => {
 		const { app, plugin } = createPlugin(null, withTasks());
 		await plugin.onload();
 
@@ -362,8 +377,8 @@ describe('карта задач', () => {
 		expect(app.metadataTypeManager?.setTypeCalls).toEqual([
 			['Выполнено', 'checkbox'],
 			['Дата и время', 'datetime'],
-			['Дата выполнения', 'date'],
-			['Дата переноса', 'date'],
+			['Дата выполнения', 'datetime'],
+			['Дата переноса', 'datetime'],
 		]);
 	});
 
@@ -377,8 +392,8 @@ describe('карта задач', () => {
 		await plugin.assignPropertyTypes();
 
 		expect(manager.setTypeCalls).toEqual([
-			['Дата выполнения', 'date'],
-			['Дата переноса', 'date'],
+			['Дата выполнения', 'datetime'],
+			['Дата переноса', 'datetime'],
 		]);
 	});
 

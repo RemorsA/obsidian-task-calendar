@@ -4,6 +4,7 @@ import {
 	automate,
 	buildTaskFile,
 	DATE_FORMAT,
+	DATE_TIME_FORMAT,
 	Frontmatter,
 	frontmatterOf,
 	NewTask,
@@ -40,7 +41,12 @@ const hashOf = (text: string): string => {
 /** Сколько файлов без кэша метаданных читаем одновременно при полном скане. */
 const SCAN_CHUNK = 20;
 
-const today = (): string => moment().format(DATE_FORMAT);
+/**
+ * Текущий момент с точностью до минуты - для `Дата выполнения` (просьба
+ * пользователя 14.11.2026). Секунды - всегда `:00`: так пишет и сам Obsidian,
+ * когда время выбирают в панели свойств, и там такое время показано без секунд.
+ */
+const now = (): string => moment().seconds(0).format(DATE_TIME_FORMAT);
 
 export class TaskMap {
 	private readonly plugin: TaskCalendarPlugin;
@@ -352,7 +358,7 @@ export class TaskMap {
 		const frontmatter = frontmatterOf(content);
 
 		// Пробуем автоматику на копии: писать стоит, только если что-то меняется.
-		if (previous && frontmatter && automate({ ...frontmatter }, previous, today()).changed) {
+		if (previous && frontmatter && automate({ ...frontmatter }, previous, now()).changed) {
 			await this.writeTask(file, previous, () => true);
 
 			return true;
@@ -382,7 +388,7 @@ export class TaskMap {
 				const task = readTask(file.path, frontmatter);
 				if (!task || !change(frontmatter, task)) return;
 
-				next = automate(frontmatter, previous, today()).next;
+				next = automate(frontmatter, previous, now()).next;
 			});
 		} catch (error) {
 			console.error(`${file.path}:`, error);
@@ -458,13 +464,13 @@ export class TaskMap {
 	/**
 	 * Новая задача - шаблон для ручного заполнения (просьба пользователя
 	 * 14.11.2026, вместо окна с полями): файл `ГГГГММДД_ЧЧММСС.md` в папке для
-	 * новых задач, `Дата и время` - текущие дата и время, те же, что в имени
-	 * файла, `Выполнено: false`, остальное пустое. Задачей файл станет, когда
-	 * заполнят `Задача`. Возвращает путь файла или null, если создать не вышло.
+	 * новых задач, `Дата и время` - сегодня, 08:00 (`DEFAULT_TIME`, просьба
+	 * пользователя 14.11.2026), `Выполнено: false`, остальное пустое. Задачей
+	 * файл станет, когда заполнят `Задача`. Возвращает путь файла или null, если
+	 * создать не вышло.
 	 */
 	async createBlankTask(): Promise<string | null> {
 		const folder = this.folder();
-		const now = moment();
 
 		try {
 			await this.ensureFolder(folder);
@@ -475,28 +481,24 @@ export class TaskMap {
 			return null;
 		}
 
-		return this.createFile(
-			folder,
-			{ text: '', date: now.format(DATE_FORMAT), repeat: null, subtasks: [] },
-			now
-		);
+		return this.createFile(folder, { text: '', date: moment().format(DATE_FORMAT), repeat: null, subtasks: [] });
 	}
 
 	/**
 	 * Файл задачи в папке. Имя - время создания; занято (две задачи в одну
-	 * секунду) - с суффиксом `_2`, `_3`. То же время - в `Дата и время`: и у
-	 * пустого шаблона, и у следующего повтора.
+	 * секунду) - с суффиксом `_2`, `_3`. Имя задаётся один раз и на даты не
+	 * влияет.
 	 *
 	 * Карта сводится сразу: карточка должна появиться, не дожидаясь debounce.
 	 */
-	private async createFile(folder: string, task: NewTask, now = moment()): Promise<string | null> {
+	private async createFile(folder: string, task: NewTask): Promise<string | null> {
 		const { vault } = this.plugin.app;
-		const base = `${folder ? `${folder}/` : ''}${taskFileName(now)}`;
+		const base = `${folder ? `${folder}/` : ''}${taskFileName(moment())}`;
 		let path = `${base}.md`;
 
 		for (let n = 2; vault.getAbstractFileByPath(path); n++) path = `${base}_${n}.md`;
 
-		const content = buildTaskFile(task, now.format('HH:mm:ss'));
+		const content = buildTaskFile(task);
 
 		try {
 			await vault.create(path, content);
