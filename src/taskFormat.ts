@@ -1,95 +1,71 @@
-import { moment } from 'obsidian';
+import { moment, parseYaml } from 'obsidian';
 
 /**
- * Формат задачи: строка задачи с параметрами-эмодзи, подзадачи с отступом под ней.
+ * Формат задачи: отдельный файл со свойствами (версия 1.0.1, 13.11.2026).
  *
+ * ```yaml
+ * ---
+ * Задача: Купить молоко
+ * Выполнено: false
+ * Дата и время: 2026-11-13T08:00:00
+ * Дата выполнения:
+ * Повтор: Каждый день
+ * Дата переноса:
+ * Подзадача-1: Проверить срок
+ * Подзадача-1-выполнено: false
+ * ---
  * ```
- * - [ ] Купить молоко 📅 2026-08-21 🔁 Каждый день ✅ 2026-08-21
- * 	- [ ] Проверить срок
- * ```
  *
- * **Файл - авторитет.** Любой параметр можно выставить, изменить или удалить
- * руками: плагин ничего не нормализует и не переписывает по своей инициативе.
- * Единственная автоматика в файле - переключение чекбокса (см. `taskMap.ts`).
+ * Задача - любой `.md` хранилища с непустым строковым `Задача`. Имя файла - время
+ * создания `ГГГГММДД_ЧЧММСС`. Порядок карточек - по `Дата и время`, раньше выше.
+ * Тело файла под свойствами плагин не читает и не трогает.
  *
- * Задача - это файл, конкретный экземпляр (текущий блок или архивный блок
- * цепочки повтора) адресуется парой «файл + порядковый номер блока».
- * Отдельного айди нет, номер пересчитывается при переиндексации.
+ * Здесь всё, что не обращается к хранилищу: чтение свойств, сборка файла,
+ * грамматика повтора, автоматика переходов и порядок списка.
  */
 
 export const DATE_FORMAT = 'YYYY-MM-DD';
 
-/**
- * Эмодзи параметров. При чтении `↔` принимается и без селектора U+FE0F, при
- * записи он ставится всегда - иначе в одних темах стрелка нарисуется текстом.
- */
-export const EMOJI = {
-	date: '\u{1F4C5}',
-	move: '↔️',
-	repeat: '\u{1F501}',
-	done: '✅',
+/** `Дата и время` - так его пишет сам Obsidian, тип «Дата и время». */
+export const DATE_TIME_FORMAT = 'YYYY-MM-DD[T]HH:mm:ss';
+
+/** Свойства задачи - ровно так, как они называются в файле. */
+export const PROPS = {
+	text: 'Задача',
+	checked: 'Выполнено',
+	// До 14.11.2026 - «Дата» без времени; переименовано по просьбе пользователя.
+	date: 'Дата и время',
+	doneDate: 'Дата выполнения',
+	repeat: 'Повтор',
+	move: 'Дата переноса',
 } as const;
 
-export type ParamName = keyof typeof EMOJI;
-
-/** Порядок параметров при записи. При чтении порядок произвольный. */
-const PARAM_ORDER: ParamName[] = ['date', 'move', 'repeat', 'done'];
-
-/** Параметры, по которым узнаётся блок. Почему без ↔️ - см. `blockShape`. */
-const SHAPE_PARAMS: ParamName[] = ['date', 'repeat', 'done'];
-
-const PARAM_BY_EMOJI: Record<string, ParamName> = {
-	'\u{1F4C5}': 'date',
-	'↔️': 'move',
-	'↔': 'move',
-	'\u{1F501}': 'repeat',
-	'✅': 'done',
+/**
+ * Типы свойств в панели свойств Obsidian. Пустое при создании свойство Obsidian
+ * показал бы текстом: у «Дата переноса» не было бы выбора даты. Галочки
+ * подзадач с номером в имени не перечислить - их `false` Obsidian и так
+ * показывает флажком.
+ */
+export const PROPERTY_TYPES: Record<string, string> = {
+	[PROPS.checked]: 'checkbox',
+	[PROPS.date]: 'datetime',
+	[PROPS.doneDate]: 'date',
+	[PROPS.move]: 'date',
 };
 
-/**
- * Начало строки задачи: маркер списка и галочка. Параметры ищутся в тексте после
- * него. Пункт без галочки задачей не бывает - поэтому и блоки старого формата
- * (`- 📅 2026-08-21` отдельной строкой) не подхватываются даже наполовину.
- */
-const TASK_HEAD = /^(?:[-*+]|\d+[.)])[ \t]+\[[^\]]\](?:[ \t]+|$)/;
+export const subtaskTextKey = (number: number): string => `Подзадача-${number}`;
+export const subtaskCheckedKey = (number: number): string => `Подзадача-${number}-выполнено`;
 
-/**
- * Значение 📅, ↔️ и ✅: слово вида YYYY-MM-DD сразу за эмодзи. Другое слово
- * значением не считается, и эмодзи остаётся текстом: в «✅ Проверить отчёт»
- * параметра нет, и выполнение не перепишет «Проверить» датой.
- */
-const DATE_WORD = /^\s*(\d{4}-\d{2}-\d{2})(?=\s|$)/;
-
-/**
- * Эмодзи параметра. Параметр начинается только в начале текста или после
- * пробела: эмодзи, приклеенный к слову, - часть текста задачи.
- */
-const PARAM_EMOJI = /(^|\s)(\u{1F4C5}|↔️?|\u{1F501}|✅)/u;
-
-/** Строка списка любого уровня: `- пункт`, `* пункт`, `1. пункт`, `2) пункт`. */
-const LIST_LINE = /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+/;
-
-/** Чекбокс: отступ с маркером, знак в скобках, остаток строки. */
-const CHECKBOX_LINE = /^([ \t]*(?:[-*+]|\d+[.)])[ \t]+\[)([^\]])(\].*)$/;
-
-/** Открытие или закрытие блока кода: внутри него списков не бывает. */
-const FENCE_LINE = /^[ \t]*(?:```|~~~)/;
-
-/** Открытие блока кода нулевого уровня: сама ограда - три и больше ` или ~. */
-const FENCE_OPEN = /^(`{3,}|~{3,})/;
-
-/**
- * Строка закрывает блок кода: та же ограда (тот же символ, не короче открывающей)
- * и ничего, кроме неё. ``` внутри блока ~~~ его не закрывает - как в Markdown.
- */
-const closesFence = (line: string, open: string): boolean => {
-	const close = line.match(/^[ \t]{0,3}(`{3,}|~{3,})[ \t]*$/)?.[1];
-
-	return close !== undefined && close[0] === open[0] && close.length >= open.length;
-};
+/** Ключ подзадачи: текст `Подзадача-N` или галочка `Подзадача-N-выполнено`. */
+const SUBTASK_KEY = /^Подзадача-(\d+)(-выполнено)?$/;
 
 /** Строго YYYY-MM-DD: времени и таймзон формат не хранит. */
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** `ГГГГ-ММ-ДД`, `ГГГГ-ММ-ДДTЧЧ:ММ` или `ГГГГ-ММ-ДДTЧЧ:ММ:СС`, без таймзоны. */
+const DATE_TIME = /^(\d{4}-\d{2}-\d{2})(?:T(\d{2}:\d{2})(:\d{2})?)?$/;
+
+export type Frontmatter = Record<string, unknown>;
 
 export type RepeatUnit = 'day' | 'week' | 'month' | 'year';
 
@@ -103,56 +79,46 @@ export interface Repeat {
 	months?: number[];
 }
 
-/** Задача в карте - один валидный блок одного файла. */
-export interface Task {
-	/** `${filePath}${fileName}.md#${blockIndex}`. */
-	key: string;
-	/** Порядковый номер блока в файле, считая и невалидные. */
-	blockIndex: number;
-	/** 📅 - обязательный параметр: день задачи в череде и точка отсчёта повтора. */
-	date: string;
-	/** ↔️ - день показа, если экземпляр перенесли. */
-	move: string | null;
-	/** 🔁 - текст повтора как он написан в файле. */
-	repeat: string | null;
-	/** ✅ - маркер факта выполнения. */
-	done: string | null;
-	/** Имя файла без `.md`. */
-	fileName: string;
-	/** Путь до папки со слэшами по краям: корень хранилища - `/`. */
-	filePath: string;
-	/** Списки тела без общего отступа: `- [ ] Task\n\t- [ ] Sub Task`. */
-	body: string | null;
-	/** Все чекбоксы отмечены. Справочное поле, к группировке отношения не имеет. */
+export interface Subtask {
+	/** N из имени свойства: по нему подзадача находится в файле. */
+	number: number;
+	text: string;
 	checked: boolean;
-	/** Ключ сортировки по наименованию. В файл не пишется. */
-	sortKey: string;
-	/**
-	 * Цепочка повтора внутри файла - первый пункт тела без маркера и галочки. В
-	 * месячном файле лежат разные задачи, и «день занят своим блоком» считается
-	 * только по блокам своей цепочки. В файл не пишется.
-	 */
-	chain: string;
 }
 
-/** Значение параметра и его место в строке задачи: от эмодзи до конца значения. */
-export interface BlockParam {
-	value: string;
-	from: number;
-	to: number;
+/** Задача в карте - один файл. */
+export interface Task {
+	/** Путь файла в хранилище - он же ключ задачи. */
+	path: string;
+	/** Имя файла без `.md`: время создания, по нему идёт порядок карточек. */
+	fileName: string;
+	/** Папка файла без слэшей по краям, корень хранилища - пустая строка. */
+	folder: string;
+	text: string;
+	/** `Выполнено` - галочка самой задачи. */
+	checked: boolean;
+	/** День из `Дата и время`, `ГГГГ-ММ-ДД` - день задачи и база расчёта повтора. */
+	date: string | null;
+	/** `Дата и время` целиком, `ГГГГ-ММ-ДДTЧЧ:ММ:СС` - по нему порядок списка. */
+	dateTime: string | null;
+	/** `Дата выполнения` - есть она, значит задача выполнена. */
+	doneDate: string | null;
+	/** `Повтор` - текст как написан. Нераспознанный - задача без повтора. */
+	repeat: string | null;
+	/** `Дата переноса` - день, на который перенесли повторную задачу. */
+	move: string | null;
+	/** Подзадачи с текстом по порядку N. */
+	subtasks: Subtask[];
 }
 
-/** Разобранный блок: строка задачи и строки тела - номерами строк файла. */
-export interface ParsedBlock {
-	index: number;
-	/** Строка задачи. Новый блок повтора вставляется прямо перед ней. */
-	start: number;
-	/** Последняя строка блока. */
-	end: number;
-	/** Параметры строки задачи. */
-	params: Partial<Record<ParamName, BlockParam>>;
-	/** Строки тела по возрастанию: строка задачи и всё, что с отступом под ней. */
-	body: number[];
+/** Данные нового файла задачи: пустой шаблон или следующий повтор. */
+export interface NewTask {
+	/** `Задача`. Пусто - пустое свойство (шаблон для ручного заполнения). */
+	text: string;
+	/** `Дата и время`, `ГГГГ-ММ-ДДTЧЧ:ММ:СС`. */
+	dateTime: string | null;
+	repeat: string | null;
+	subtasks: string[];
 }
 
 /**
@@ -236,14 +202,40 @@ const parseWeekdays = (text: string): number[] | null => parseNumberList(text, W
 
 const parseMonths = (text: string): number[] | null => parseNumberList(text, MONTH_WORDS);
 
+const REPEAT_UNITS = Object.keys(REPEAT_UNIT_WORDS) as RepeatUnit[];
+
+const unitOf = (word: string): RepeatUnit | undefined =>
+	REPEAT_UNITS.find((key) => REPEAT_UNIT_WORDS[key].includes(word));
+
 /**
- * Разобрать текст 🔁. Незнакомая форма - null, и блок целиком невалиден:
- * показать задачу с нераспознанным повтором значило бы соврать о её дате.
+ * Единица и оговорка после неё. Оговорка пишется с «в» («каждую неделю в
+ * субботу») или без него («каждую неделю суббота, воскресенье») - упрощённая
+ * запись из обновления 1.0.1, намеренная, а не опечатка.
+ */
+const splitClause = (rest: string): { head: string; tail: string | null } => {
+	const clauseAt = rest.search(CLAUSE);
+
+	if (clauseAt !== -1) {
+		return { head: rest.slice(0, clauseAt), tail: rest.slice(clauseAt).replace(CLAUSE, '') };
+	}
+
+	const space = rest.indexOf(' ');
+	if (space !== -1 && unitOf(rest.slice(0, space))) {
+		return { head: rest.slice(0, space), tail: rest.slice(space + 1) };
+	}
+
+	return { head: rest, tail: null };
+};
+
+/**
+ * Разобрать текст повтора. Незнакомая форма - null, и задача живёт как обычная:
+ * не генерирует следующую и в календаре не размножается.
  *
  * Понимает:
  * - «каждый день», «каждый 2 день», «каждые 3 дня»;
  * - «каждую неделю», «каждые 2 недели»; «каждый месяц»; «каждый год»;
  * - «каждые 2 недели в субботу», «каждую неделю в понедельник, среду»;
+ * - то же без «в»: «каждую неделю суббота, воскресенье», «каждый год июль, август»;
  * - «каждый год в марте, сентябре»;
  * - короткие формы «каждую субботу» и «каждый март»;
  * - наречия «ежедневно», «еженедельно», «ежемесячно», «ежегодно».
@@ -252,7 +244,7 @@ const parseMonths = (text: string): number[] | null => parseNumberList(text, MON
  * «Каждый месяц в субботу» и «каждую неделю в марте» не принимаются.
  *
  * «Каждые 2 марта» - это «каждые 2 года в марте», а не второе марта: число в
- * повторке всегда означает шаг, число месяца берётся из 📅.
+ * повторе всегда означает шаг, число месяца берётся из `Дата и время`.
  */
 export const parseRepeat = (value: unknown): Repeat | null => {
 	if (typeof value !== 'string') return null;
@@ -275,12 +267,8 @@ export const parseRepeat = (value: unknown): Repeat | null => {
 	if (!Number.isInteger(interval) || interval < 1) return null;
 	if (intervalMatch) rest = rest.replace(REPEAT_INTERVAL, '');
 
-	const clauseAt = rest.search(CLAUSE);
-	const head = clauseAt === -1 ? rest : rest.slice(0, clauseAt);
-	const tail = clauseAt === -1 ? null : rest.slice(clauseAt).replace(CLAUSE, '');
-
-	const units = Object.keys(REPEAT_UNIT_WORDS) as RepeatUnit[];
-	const unit = units.find((key) => REPEAT_UNIT_WORDS[key].includes(head));
+	const { head, tail } = splitClause(rest);
+	const unit = unitOf(head);
 
 	if (tail !== null) {
 		// «в субботу» уточняет только неделю: у месяца и года таких суббот много.
@@ -312,8 +300,17 @@ export const parseRepeat = (value: unknown): Repeat | null => {
 	return months ? { interval, unit: 'year', months } : null;
 };
 
-/** Значение параметра-даты. Всё, что не строгое YYYY-MM-DD, - null. */
+/**
+ * Значение свойства-даты. Всё, что не строгое YYYY-MM-DD, - null.
+ *
+ * Дата из YAML бывает и объектом `Date` (так её отдаёт парсер без схемы) - его
+ * полночь в UTC, поэтому и формат берётся в UTC.
+ */
 export const normalizeDate = (value: unknown): string | null => {
+	if (value instanceof Date) {
+		return Number.isNaN(value.getTime()) ? null : moment.utc(value).format(DATE_FORMAT);
+	}
+
 	if (typeof value !== 'string') return null;
 
 	const trimmed = value.trim();
@@ -323,8 +320,31 @@ export const normalizeDate = (value: unknown): string | null => {
 };
 
 /**
- * Следующая дата повтора. База - 📅 выполненного блока, шаг применяется **ровно
- * один раз**: ни ✅, ни сегодняшний день в расчёте не участвуют.
+ * Значение `Дата и время` строкой `ГГГГ-ММ-ДДTЧЧ:ММ:СС`. Obsidian пишет его с
+ * секундами, без секунд тоже читается; одна дата без времени (вписали руками
+ * текстом) - полночь. Остальное - null.
+ *
+ * Объект `Date` из YAML (парсер без схемы) - время в UTC, как и у даты.
+ */
+export const normalizeDateTime = (value: unknown): string | null => {
+	if (value instanceof Date) {
+		return Number.isNaN(value.getTime()) ? null : moment.utc(value).format(DATE_TIME_FORMAT);
+	}
+
+	if (typeof value !== 'string') return null;
+
+	const match = value.trim().match(DATE_TIME);
+	if (!match) return null;
+
+	const text = `${match[1]}T${match[2] ?? '00:00'}${match[3] ?? ':00'}`;
+
+	return moment(text, DATE_TIME_FORMAT, true).isValid() ? text : null;
+};
+
+/**
+ * Следующая дата повтора. База - `Дата и время` выполненной задачи, шаг применяется
+ * **ровно один раз**: ни дата выполнения, ни сегодняшний день в расчёте не
+ * участвуют.
  *
  * Следствие: задача, закрытая с опозданием, получит следующую дату тоже в
  * прошлом и сразу попадёт в просроченные. Это ожидаемо - догонять до
@@ -376,19 +396,29 @@ export const nextDate = (base: string, repeat: Repeat): string | null => {
 };
 
 /**
- * Сколько шагов череды перебираем, докручивая её до видимого окна. Ежедневная
+ * Дата файла следующего повтора: следующая после `Дата и время`. Совпала с днём, на
+ * который перенесли саму задачу, - берётся следующая за ней, иначе в один день
+ * встали бы две одинаковые карточки.
+ */
+export const nextRepeatDate = (base: string, repeat: Repeat, skip: string | null): string | null => {
+	const next = nextDate(base, repeat);
+
+	return next !== null && next === skip ? nextDate(next, repeat) : next;
+};
+
+/**
+ * Сколько шагов повтора перебираем, докручивая его до видимого окна. Ежедневная
  * задача покрывает этим полтора года; дальше проекция молча обрывается - точнее
  * посчитать нельзя, а вешать интерфейс на бесконечном переборе нельзя тем более.
  */
 export const OCCURRENCE_LIMIT = 500;
 
 /**
- * Дни череды повтора **строго после базы**, попавшие в окно `[from, to]`.
+ * Дни повтора **строго после базы**, попавшие в окно `[from, to]`.
  *
- * Нужна календарю: в файле живёт только текущий блок, а следующий появляется
- * лишь после закрытия предыдущего. Без проекции у повторяющейся задачи была бы
- * одна точка - на её собственном дне, и выбрать в календаре следующую субботу,
- * чтобы отметить именно её, было бы негде.
+ * Нужна календарю: в хранилище лежит только текущий файл повтора, следующий
+ * появляется после выполнения. Без проекции у повторяющейся задачи была бы одна
+ * точка - на её собственном дне.
  *
  * Считается перебором `nextDate`, а не арифметикой по шагу: у месячного повтора
  * число зажимается по длине месяца (31 -> 28), и следующий шаг идёт уже от
@@ -399,7 +429,6 @@ export const occurrencesInRange = (
 	repeat: Repeat,
 	from: string,
 	to: string,
-	taken: ReadonlySet<string> = new Set(),
 	limit: number = OCCURRENCE_LIMIT
 ): string[] => {
 	const days: string[] = [];
@@ -407,789 +436,355 @@ export const occurrencesInRange = (
 
 	for (let step = 0; step < limit; step++) {
 		const next = nextDate(current, repeat);
-		// Повтор, не двигающий дату, - невозможен, но зациклиться на нём нельзя.
+		// Повтор, не двигающий дату, невозможен, но зациклиться на нём нельзя.
 		if (!next || next <= current) break;
 
 		current = next;
 		if (current > to) break;
-		// День, у которого уже есть свой блок, череда перескакивает: его судьбу
-		// решает этот блок, а не расчёт.
-		if (current >= from && !taken.has(current)) days.push(current);
+		if (current >= from) days.push(current);
 	}
 
 	return days;
 };
 
-/**
- * Следующий день череды после базы, **пропуская дни, у которых уже есть свой
- * блок**. Отметили повтор наперёд - дошедшая до него череда его перескочит.
- *
- * Свободного дня не нашлось за `limit` шагов - null, генерации не будет: лучше
- * оборвать цепочку, чем поставить второй блок на занятый день.
- */
-export const nextFreeDate = (
-	base: string,
-	repeat: Repeat,
-	taken: ReadonlySet<string> = new Set(),
-	limit: number = OCCURRENCE_LIMIT
-): string | null => {
-	let current = base;
+/** Текст свойства: строка или число, обрезанное и непустое. */
+const readText = (value: unknown): string | null => {
+	if (typeof value === 'number') return String(value);
+	if (typeof value !== 'string') return null;
 
-	for (let step = 0; step < limit; step++) {
-		const next = nextDate(current, repeat);
-		if (!next || next <= current) return null;
-		if (!taken.has(next)) return next;
+	const trimmed = value.trim();
 
-		current = next;
+	return trimmed === '' ? null : trimmed;
+};
+
+/** Галочка свойства: булево `true`; строка `true` - так её пишут в кавычках. */
+const readFlag = (value: unknown): boolean =>
+	value === true || (typeof value === 'string' && value.trim().toLowerCase() === 'true');
+
+/** Номера подзадач, у которых есть хоть одно свойство пары, по возрастанию. */
+export const subtaskNumbers = (frontmatter: Frontmatter): number[] => {
+	const numbers = new Set<number>();
+
+	for (const key of Object.keys(frontmatter)) {
+		const match = key.match(SUBTASK_KEY);
+		if (match) numbers.add(Number(match[1]));
 	}
 
-	return null;
+	return [...numbers].sort((a, b) => a - b);
 };
 
 /**
- * Параметры строки задачи и их место в строке.
- *
- * - 📅, ↔️, ✅ - значение одно слово вида YYYY-MM-DD сразу за эмодзи. Что идёт за
- *   ним до следующего параметра (тег, текст), остаётся текстом задачи.
- * - 🔁 - значение весь текст до следующего параметра, тега или конца строки:
- *   повтор пишется словами.
- * - Эмодзи без значения параметром не считается - `📅` без даты это текст.
- * - Параметр повторился - в счёт идёт первый, остальные остаются текстом.
- *
- * Не строка задачи (абзац, пункт без галочки) - параметров нет: там эмодзи
- * ничего не значат.
+ * Подзадачи по порядку N. Текст без пары `-выполнено` - неотмеченная подзадача;
+ * `-выполнено` без текста пропускается: показывать в карточке нечего.
  */
-export const lineParams = (line: string): Partial<Record<ParamName, BlockParam>> => {
-	const params: Partial<Record<ParamName, BlockParam>> = {};
-	const head = line.match(TASK_HEAD);
-	if (!head) return params;
+export const readSubtasks = (frontmatter: Frontmatter): Subtask[] =>
+	subtaskNumbers(frontmatter).flatMap((number) => {
+		const text = readText(frontmatter[subtaskTextKey(number)]);
 
-	const offset = head[0].length;
-	const text = line.slice(offset);
-	const marks: { at: number; emoji: string }[] = [];
-	const search = new RegExp(PARAM_EMOJI.source, 'gu');
-	let match: RegExpExecArray | null;
-
-	while ((match = search.exec(text)) !== null) {
-		marks.push({ at: match.index + match[1].length, emoji: match[2] });
-	}
-
-	marks.forEach((mark, i) => {
-		const name = PARAM_BY_EMOJI[mark.emoji];
-		if (!name || params[name]) return;
-
-		const from = mark.at + mark.emoji.length;
-		const region = text.slice(from, i + 1 < marks.length ? marks[i + 1].at : text.length);
-		const word = region.match(DATE_WORD);
-		// Тег повтором не бывает: `#` в грамматике нет, а с ним 🔁 не разобрался бы.
-		const words = region.split(/\s#/)[0];
-		const value = name === 'repeat' ? words.trim() : word?.[1] ?? '';
-		if (!value) return;
-
-		const end = name === 'repeat' ? words.trimEnd().length : (word?.[0].length ?? 0);
-		params[name] = { value, from: offset + mark.at, to: offset + from + end };
+		return text === null
+			? []
+			: [{ number, text, checked: readFlag(frontmatter[subtaskCheckedKey(number)]) }];
 	});
 
-	return params;
-};
+/** В нумерации подзадач дыра: удалили пару из середины. */
+export const hasNumberingGap = (frontmatter: Frontmatter): boolean =>
+	subtaskNumbers(frontmatter).some((number, i) => number !== i + 1);
 
 /**
- * Разобрать файл на блоки.
- *
- * Блок открывает **строка задачи** - пункт списка нулевого уровня с галочкой, в
- * котором есть хотя бы один параметр. Каждая такая строка - свой блок, даже если
- * они идут подряд. Пустые строки границей не являются.
- *
- * Тело - строка задачи и строки с отступом под ней. Строка нулевого уровня без
- * параметров (абзац, заголовок, чужой пункт списка) в блок не попадает и **блок
- * закрывает**: строки с отступом под ней принадлежат ей, а не задаче выше. Иначе
- * подпункты соседнего списка ниже по заметке уезжали бы в тело задачи с датой.
+ * Перенумеровать подзадачи подряд: 1, 3, 4 -> 1, 2, 3. Пары переезжают целиком,
+ * вместе с пустыми значениями: недописанную подзадачу не теряем.
  */
-export const parseBlocks = (lines: string[]): ParsedBlock[] => {
-	const blocks: ParsedBlock[] = [];
-	let current: ParsedBlock | null = null;
-	/**
-	 * Открывающая строка блока кода нулевого уровня, пока он не закрыт. Его строки
-	 * - пример, а не задачи: без этого `- [ ] Task 📅 ...` внутри ``` ушёл бы в
-	 * календарь, а отметка дописывала бы повторы прямо в код. Блок кода с отступом
-	 * внутри задачи отслеживать не нужно: его строки и так тело, а строку нулевого
-	 * уровня Markdown и так считает концом и пункта, и кода в нём.
-	 */
-	let fence: string | null = null;
+export const renumberSubtasks = (frontmatter: Frontmatter): void => {
+	const pairs = subtaskNumbers(frontmatter).map((number) => ({
+		text: frontmatter[subtaskTextKey(number)],
+		checked: frontmatter[subtaskCheckedKey(number)],
+		hasText: subtaskTextKey(number) in frontmatter,
+		hasChecked: subtaskCheckedKey(number) in frontmatter,
+	}));
 
-	for (let i = 0; i < lines.length; i++) {
-		const line = lines[i];
-
-		if (fence !== null) {
-			if (closesFence(line, fence)) fence = null;
-			continue;
-		}
-
-		if (line.trim() === '') continue;
-
-		if (/^[ \t]/.test(line)) {
-			if (!current) continue;
-
-			current.body.push(i);
-			current.end = i;
-			continue;
-		}
-
-		// Блок кода нулевого уровня закрывает задачу над ним, как любая строка без
-		// отступа, и дальше до закрывающей строки всё ничьё.
-		const open = line.match(FENCE_OPEN);
-		if (open) {
-			fence = open[1];
-			current = null;
-			continue;
-		}
-
-		// Строка нулевого уровня без параметров - конец блока: отступы под ней уже
-		// не тело задачи.
-		const params = lineParams(line);
-		current = PARAM_ORDER.some((name) => params[name])
-			? { index: blocks.length, start: i, end: i, params, body: [i] }
-			: null;
-
-		if (current) blocks.push(current);
+	for (const key of Object.keys(frontmatter)) {
+		if (SUBTASK_KEY.test(key)) delete frontmatter[key];
 	}
 
-	return blocks;
+	pairs.forEach((pair, i) => {
+		if (pair.hasText) frontmatter[subtaskTextKey(i + 1)] = pair.text;
+		if (pair.hasChecked) frontmatter[subtaskCheckedKey(i + 1)] = pair.checked;
+	});
 };
 
-/** 📅 блока - его единственная дата и база расчёта повтора. */
-export const blockDate = (block: ParsedBlock): string | null =>
-	normalizeDate(block.params.date?.value);
-
-/**
- * День показа блока: ↔️, если она есть и разобралась, иначе 📅.
- *
- * Мусор в ↔️ блок не ломает - показываем по 📅: 📅 у валидного блока есть всегда,
- * а молча спрятать задачу из-за кривой строки хуже, чем показать её на своём дне.
- */
-export const blockShow = (block: ParsedBlock): string | null =>
-	normalizeDate(block.params.move?.value) ?? normalizeDate(block.params.date?.value);
-
-/** Отступ строки: табы и пробелы по отдельности. */
-const indentOf = (line: string): { tabs: number; spaces: number } => {
-	const indent = line.match(/^[ \t]*/)?.[0] ?? '';
-	let tabs = 0;
-	let spaces = 0;
-
-	for (const char of indent) {
-		if (char === '\t') tabs++;
-		else spaces++;
-	}
-
-	return { tabs, spaces };
-};
-
-/**
- * Уровень вложенности каждой строки тела, считая от самой левой строки блока.
- *
- * Один уровень - это таб, 2 или 4 пробела, причём в одной заметке они бывают
- * вперемешку. Шаг в пробелах вычисляется по блоку: берётся самый маленький
- * ненулевой пробельный отступ, остальные меряются им.
- */
-const bodyLevels = (lines: string[], block: ParsedBlock): Map<number, number> => {
-	let unit = 0;
-
-	for (const i of block.body) {
-		const { spaces } = indentOf(lines[i]);
-		if (spaces > 0 && (unit === 0 || spaces < unit)) unit = spaces;
-	}
-
-	const levels = new Map<number, number>();
-	let min = Number.MAX_SAFE_INTEGER;
-
-	for (const i of block.body) {
-		const { tabs, spaces } = indentOf(lines[i]);
-		const level = tabs + (unit > 0 ? Math.round(spaces / unit) : 0);
-		levels.set(i, level);
-		if (level < min) min = level;
-	}
-
-	// Общий отступ снимается: тело блока начинается с нулевого уровня.
-	for (const [i, level] of levels) levels.set(i, level - min);
-
-	return levels;
-};
-
-/**
- * Строки тела, которые видны в карточке: только списки, только вне блоков кода.
- *
- * Этот же набор задаёт нумерацию чекбоксов. Важно, что он один: разойдись отбор
- * для показа и отбор для отметки - галочка правила бы чужую строку.
- */
-export const renderLines = (lines: string[], block: ParsedBlock): number[] => {
-	const out: number[] = [];
-	let fence = false;
-
-	for (const i of block.body) {
-		if (FENCE_LINE.test(lines[i])) {
-			fence = !fence;
-			continue;
-		}
-
-		if (!fence && LIST_LINE.test(lines[i])) out.push(i);
-	}
-
-	return out;
-};
-
-/** Строки чекбоксов блока сверху вниз - в том же порядке их рисует рендер. */
-export const checkboxLines = (lines: string[], block: ParsedBlock): number[] =>
-	renderLines(lines, block).filter((i) => CHECKBOX_LINE.test(lines[i]));
-
-const isChecked = (line: string): boolean =>
-	(line.match(CHECKBOX_LINE)?.[2] ?? ' ').toLowerCase() === 'x';
-
-/** Вырезать параметр вместе с пробелами перед ним - чтобы не копить двойные пробелы. */
-const cutParam = (line: string, param: BlockParam): string => {
-	let start = param.from;
-	while (start > 0 && /[ \t]/.test(line[start - 1])) start--;
-
-	return line.slice(0, start) + line.slice(param.to);
-};
-
-/** Строка задачи без параметров: так её показывает карточка и так её копирует повтор. */
-const withoutParams = (line: string): string => {
-	const params = lineParams(line);
-
-	// С конца строки: вырезанный справа параметр не сдвигает тех, что левее.
-	return PARAM_ORDER
-		.map((name) => params[name])
-		.filter((param): param is BlockParam => param !== undefined)
-		.sort((a, b) => b.from - a.from)
-		.reduce(cutParam, line);
-};
-
-/** Тело для карточки: списки блока, отступы в табах, общий отступ снят. */
-const bodyText = (lines: string[], block: ParsedBlock): string => {
-	const levels = bodyLevels(lines, block);
-
-	return renderLines(lines, block)
-		.map((i) => {
-			const line = i === block.start ? withoutParams(lines[i]) : lines[i];
-
-			return '\t'.repeat(levels.get(i) ?? 0) + line.trimStart();
-		})
-		.join('\n');
-};
-
-/** `[[Заметка|Текст]]` и `[текст](url)` - в разметке ключа сортировки не нужны. */
-const WIKI_LINK = /\[\[([^\]|]+)(?:\|([^\]]*))?\]\]/g;
-const MD_LINK = /\[([^\]]*)\]\(([^)]+)\)/g;
-/** Инлайн-разметка и HTML-теги. */
-const INLINE_MARKUP = /(\*\*|__|~~|==|[*_`])|<[^>]+>/g;
-/**
- * Ведущие эмодзи с модификаторами и склейками.
- *
- * Селектор `\uFE0F`, склейка `\u200D` и клавишный знак `\u20E3` стоят в классе
- * намеренно: снимается вся ведущая эмодзи-последовательность целиком, по символу
- * за проход. Именно на это и ругается no-misleading-character-class - здесь это
- * не ошибка, а смысл.
- */
-// eslint-disable-next-line no-misleading-character-class
-const LEADING_EMOJI = /^[\p{Extended_Pictographic}\p{Emoji_Modifier}\uFE0F\u200D\u20E3\s]+/u;
-/** Ведущие небуквенные символы. */
-const LEADING_SYMBOLS = /^[^\p{L}\p{N}]+/u;
-/** Маркер списка вместе с чекбоксом. */
-const LIST_MARKER = /^(?:[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+)/;
-
-/**
- * Ключ сортировки по наименованию: первый элемент тела, очищенный от разметки.
- *
- * Считается один раз при индексации и живёт в `sortKey`. В файл не пишется -
- * это производная от тела, а не свойство задачи.
- *
- * Пустой ключ означает «карточка уходит в конец своей группы»: от строки из
- * одних эмодзи и знаков препинания сравнивать нечего.
- */
-export const sortKeyOf = (body: string | null): string => {
-	const first = (body ?? '').split('\n').find((line) => line.trim() !== '');
-	if (!first) return '';
-
-	const plain = first.trimStart().replace(LIST_MARKER, '');
-
-	let text = plain
-		.replace(WIKI_LINK, (_match, target: string, alias?: string) => alias ?? target)
-		.replace(MD_LINK, (_match, label: string) => label)
-		.replace(INLINE_MARKUP, '')
-		.replace(/#(?=[\p{L}\p{N}])/gu, '');
-
-	// Эмодзи снимаются до стабилизации: за флагом может стоять ещё один.
-	let previous = '';
-	while (previous !== text) {
-		previous = text;
-		text = text.replace(LEADING_EMOJI, '');
-	}
-
-	text = text.replace(LEADING_SYMBOLS, '').replace(/\s+/g, ' ').trim();
-
-	return text || plain.replace(/\s+/g, ' ').trim();
-};
-
-/** Маркер списка с галочкой любого вида - `[ ]`, `[x]`, `[-]`, и у нумерованных тоже. */
-const CHAIN_MARKER = /^(?:[-*+]|\d+[.)])[ \t]+(?:\[[^\]]\](?:[ \t]+|$))?/;
-
-/**
- * Ключ цепочки повтора: первый пункт тела без маркера и галочки.
- *
- * Отдельного айди у цепочки нет, а в одном месячном файле лежат разные задачи.
- * Блоки одной цепочки - повтор, отмеченный наперёд день, перенесённый экземпляр -
- * получают копию тела, поэтому первый пункт у них общий. Галочка в ключ не входит:
- * копии её снимают или переносят.
- *
- * Поправили текст первого пункта у текущего блока - старые блоки цепочки с ним
- * больше не связаны, и дни, занятые ими, череда снова считает своими.
- */
-export const chainKeyOf = (body: string | null): string => {
-	const first = (body ?? '').split('\n').find((line) => line.trim() !== '');
-
-	return first ? first.trim().replace(CHAIN_MARKER, '').replace(/\s+/g, ' ').trim() : '';
-};
-
-/** Ключ цепочки блока - тот же, что `Task.chain` у его задачи. */
-export const blockChain = (lines: string[], block: ParsedBlock): string =>
-	chainKeyOf(bodyText(lines, block));
-
-/** Путь папки со слэшами по краям и имя файла без расширения. */
-export const splitPath = (path: string): { filePath: string; fileName: string } => {
+/** Папка без слэшей по краям и имя файла без расширения. */
+export const splitPath = (path: string): { folder: string; fileName: string } => {
 	const at = path.lastIndexOf('/');
-	const name = at === -1 ? path : path.slice(at + 1);
-	const folder = at === -1 ? '' : path.slice(0, at);
 
 	return {
-		filePath: folder ? `/${folder}/` : '/',
-		fileName: name.replace(/\.md$/i, ''),
+		folder: at === -1 ? '' : path.slice(0, at),
+		fileName: (at === -1 ? path : path.slice(at + 1)).replace(/\.md$/i, ''),
 	};
 };
 
-/** День показа задачи: позиция в календаре, точка и просрочка считаются по нему. */
-export const showDate = (task: Task): string => task.move ?? task.date;
+/** Задача из свойств файла. Нет непустого `Задача` - это не задача. */
+export const readTask = (path: string, frontmatter: unknown): Task | null => {
+	if (!frontmatter || typeof frontmatter !== 'object' || Array.isArray(frontmatter)) return null;
 
-/** Путь файла в хранилище по задаче - обратная операция к splitPath. */
-export const taskVaultPath = (task: Task): string =>
-	`${task.filePath.slice(1)}${task.fileName}.md`;
+	const props = frontmatter as Frontmatter;
+	const text = readText(props[PROPS.text]);
+	if (text === null) return null;
+
+	const dateTime = normalizeDateTime(props[PROPS.date]);
+
+	return {
+		path,
+		...splitPath(path),
+		text,
+		checked: readFlag(props[PROPS.checked]),
+		date: dateTime?.slice(0, 10) ?? null,
+		dateTime,
+		doneDate: normalizeDate(props[PROPS.doneDate]),
+		repeat: readText(props[PROPS.repeat]),
+		move: normalizeDate(props[PROPS.move]),
+		subtasks: readSubtasks(props),
+	};
+};
+
+/** Блок свойств в начале файла. Пустой блок `---` и `---` подряд - тоже блок. */
+const FRONTMATTER = /^---\r?\n(?:([\s\S]*?)\r?\n)?---[ \t]*(?:\r?\n|$)/;
 
 /**
- * Задачи файла - по одной на валидный блок.
- *
- * Блок валиден, только если есть 📅 с корректной датой, в теле есть хотя бы один
- * чекбокс и текст 🔁 (если он есть) разобрался. Иначе блок игнорируется **молча**:
- * в карту не попадает, карточка не рисуется, файл не правится.
+ * Свойства файла. Нет блока свойств или YAML не разобрался - null: такой файл
+ * задачей не считается, а не роняет индексацию.
  */
-export const readTasks = (path: string, content: string): Task[] => {
-	const lines = content.split('\n');
-	const { filePath, fileName } = splitPath(path);
-	const tasks: Task[] = [];
+export const frontmatterOf = (content: string): Frontmatter | null => {
+	const match = content.match(FRONTMATTER);
+	if (!match?.[1]) return null;
 
-	for (const block of parseBlocks(lines)) {
-		if (!isValidBlock(lines, block)) continue;
+	try {
+		const parsed: unknown = parseYaml(match[1]);
 
-		const date = normalizeDate(block.params.date?.value) as string;
-		const checkboxes = checkboxLines(lines, block);
-		const body = bodyText(lines, block);
-
-		tasks.push({
-			key: `${filePath}${fileName}.md#${block.index}`,
-			blockIndex: block.index,
-			date,
-			move: normalizeDate(block.params.move?.value),
-			repeat: block.params.repeat?.value ?? null,
-			done: normalizeDate(block.params.done?.value),
-			fileName,
-			filePath,
-			body: body || null,
-			checked: checkboxes.every((i) => isChecked(lines[i])),
-			sortKey: sortKeyOf(body),
-			chain: chainKeyOf(body),
-		});
+		return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+			? parsed as Frontmatter
+			: null;
+	} catch {
+		return null;
 	}
-
-	return tasks;
 };
 
-/**
- * Отпечаток блока - **его параметры**.
- *
- * По нему автоматика узнаёт, что перед ней тот же самый блок, а не другой,
- * съехавший на этот номер: номер сам по себе ненадёжен, вставили блок выше - и
- * все номера сдвинулись. Параметры для этого годятся, а 📅 у блоков одной цепочки
- * повтора к тому же разные.
- *
- * **Тело в отпечаток не входит намеренно.** Дописали в закрытый блок снятую
- * подзадачу - блок перестал быть отмеченным целиком, и ✅ должно уйти. Считай мы
- * тело частью отпечатка, такая правка выглядела бы как «другой блок», и ✅
- * осталось бы висеть на невыполненной задаче.
- *
- */
-export const blockShape = (block: ParsedBlock): string =>
-	SHAPE_PARAMS
-		.map((name) => `${name}:${block.params[name]?.value ?? ''}`)
-		.join('|');
+export const readTaskFile = (path: string, content: string): Task | null =>
+	readTask(path, frontmatterOf(content));
 
-/**
- * Блок валиден: есть 📅 с корректной датой, разобранный 🔁 (если он есть) и хотя
- * бы один чекбокс в теле. Невалидный блок не попадает в карту, не рисуется
- * карточкой и **не правится автоматикой**.
- */
-export const isValidBlock = (lines: string[], block: ParsedBlock): boolean => {
-	if (!normalizeDate(block.params.date?.value)) return false;
+/** Отмечено всё: и сама задача, и все подзадачи. */
+export const allChecked = (task: Task): boolean =>
+	task.checked && task.subtasks.every((subtask) => subtask.checked);
 
-	const repeat = block.params.repeat?.value;
-	if (repeat !== undefined && !parseRepeat(repeat)) return false;
+/** День показа: `Дата переноса`, если она есть, иначе `Дата и время`. */
+export const showDate = (task: Task): string | null => task.move ?? task.date;
 
-	return checkboxLines(lines, block).length > 0;
+/** Задача просрочена: не выполнена, а её день показа уже прошёл. */
+export const isOverdue = (task: Task, today: string): boolean => {
+	const day = showDate(task);
+
+	return task.doneDate === null && day !== null && day < today;
 };
 
-/** Правка файла: заменить `remove` строк начиная с `at` на `insert`. */
-export interface Edit {
-	at: number;
-	remove: number;
-	insert: string[];
+/** Состояние задачи с прошлой индексации - по нему узнаётся переход. */
+export interface TaskState {
+	/** Отмечено всё. */
+	all: boolean;
+	move: string | null;
+}
+
+export const stateOf = (task: Task): TaskState => ({ all: allChecked(task), move: task.move });
+
+/**
+ * Данные файла следующего повтора: то же, что у задачи, галочки сняты. День -
+ * по расчёту, время - как у задачи.
+ */
+const nextTaskOf = (task: Task, date: string): NewTask => ({
+	text: task.text,
+	dateTime: `${date}T${task.dateTime?.slice(11) ?? '00:00:00'}`,
+	repeat: task.repeat,
+	subtasks: task.subtasks.map((subtask) => subtask.text),
+});
+
+export interface Automation {
+	/** Свойства поменялись - файл надо записать. */
+	changed: boolean;
+	/** Файл следующего повтора, если его надо создать. */
+	next: NewTask | null;
 }
 
 /**
- * Применить правки одним проходом. Идут с конца, иначе первая же вставка сдвинет
- * номера строк для всех остальных.
- */
-export const applyEdits = (lines: string[], edits: Edit[]): string[] => {
-	const out = lines.slice();
-
-	// При равном месте первой идёт правка, съедающая строку: вставка на то же
-	// место должна лечь перед ней, а не быть ею затёрта.
-	for (const edit of [...edits].sort((a, b) => b.at - a.at || b.remove - a.remove)) {
-		out.splice(edit.at, edit.remove, ...edit.insert);
-	}
-
-	return out;
-};
-
-/** Параметр в каноническом виде: `📅 2026-08-21`. */
-const paramText = (name: ParamName, value: string): string => `${EMOJI[name]} ${value}`;
-
-/**
- * Поставить параметр в строке задачи: заменить существующий на месте или вписать
- * новый в канонический порядок 📅, ↔️, 🔁, ✅. Остальной текст строки не трогается.
- */
-export const withParam = (line: string, name: ParamName, value: string): string => {
-	const params = lineParams(line);
-	const text = paramText(name, value);
-	const existing = params[name];
-	if (existing) return line.slice(0, existing.from) + text + line.slice(existing.to);
-
-	// Место по канону: перед первым параметром, который должен идти позже.
-	const later = PARAM_ORDER.slice(PARAM_ORDER.indexOf(name) + 1)
-		.map((other) => params[other]?.from)
-		.filter((at): at is number => at !== undefined);
-
-	if (later.length > 0) {
-		const at = Math.min(...later);
-
-		return `${line.slice(0, at)}${text} ${line.slice(at)}`;
-	}
-
-	// Иначе - за последним параметром, а нет их - в конец текста.
-	const ends = PARAM_ORDER
-		.map((other) => params[other]?.to)
-		.filter((at): at is number => at !== undefined);
-	const at = ends.length > 0 ? Math.max(...ends) : line.trimEnd().length;
-
-	return `${line.slice(0, at)} ${text}${line.slice(at)}`;
-};
-
-/** Убрать параметр из строки задачи. Его нет - строка как была. */
-export const withoutParam = (line: string, name: ParamName): string => {
-	const existing = lineParams(line)[name];
-
-	return existing ? cutParam(line, existing) : line;
-};
-
-/** Снять галочку строки. Не чекбокс - строка как была. */
-export const unchecked = (line: string): string => line.replace(CHECKBOX_LINE, '$1 $3');
-
-/**
- * Правка строки задачи целиком. Параметры и галочка задачи живут в одной строке,
- * поэтому все перемены в ней сводятся в одну правку: две правки одной строки
- * затёрли бы одна другую.
- */
-export const taskLineEdit = (
-	lines: string[],
-	block: ParsedBlock,
-	change: (line: string) => string
-): Edit => ({ at: block.start, remove: 1, insert: [change(lines[block.start])] });
-
-/** Поставить параметр: заменить существующий или вписать новый по канону. */
-export const setParamEdit = (
-	lines: string[],
-	block: ParsedBlock,
-	name: ParamName,
-	value: string
-): Edit => taskLineEdit(lines, block, (line) => withParam(line, name, value));
-
-/** Убрать параметр. Его нет - править нечего. */
-export const removeParamEdit = (
-	lines: string[],
-	block: ParsedBlock,
-	name: ParamName
-): Edit | null =>
-	block.params[name] ? taskLineEdit(lines, block, (line) => withoutParam(line, name)) : null;
-
-/**
- * Копия блока с новыми параметрами. Строка задачи теряет свои параметры и
- * получает `params` в каноническом порядке, отступы подзадач нормализуются в
- * табы, 1 таб на уровень: своё пишем канонически, чужое не трогаем.
+ * Автоматика: что меняется в свойствах задачи после правки. Меняет `frontmatter`
+ * на месте и возвращает, нужен ли файл следующего повтора.
  *
- * `clear` снимает галочки - новому экземпляру задачи чужие отметки не нужны.
- * Перенос, наоборот, забирает состояние с собой: это тот же экземпляр, просто в
- * другой день.
+ * | Переход | Что делается |
+ * |---|---|
+ * | не всё отмечено -> всё | `Дата выполнения` - сегодня; есть повтор - он очищается, нужен следующий файл |
+ * | всё -> снята любая галочка | `Дата выполнения` очищается, повтор не возвращается |
+ * | `Дата переноса` появилась у невыполненной повторной | повтор очищается, нужен следующий файл |
+ * | дыра в нумерации подзадач | перенумеровать подряд |
+ *
+ * Срабатывают только переходы относительно прошлого состояния `previous`:
+ * правки, сделанные при выключенном плагине, не догоняются.
  */
-const copiedBlock = (
-	lines: string[],
-	block: ParsedBlock,
-	params: Partial<Record<ParamName, string>>,
-	clear: boolean
-): string[] => {
-	const levels = bodyLevels(lines, block);
+export const automate = (frontmatter: Frontmatter, previous: TaskState, today: string): Automation => {
+	const result: Automation = { changed: false, next: null };
 
-	return block.body.map((i) => {
-		if (i === block.start) {
-			const line = withoutParams(lines[i]);
+	if (hasNumberingGap(frontmatter)) {
+		renumberSubtasks(frontmatter);
+		result.changed = true;
+	}
 
-			return PARAM_ORDER.reduce((text, name) => {
-				const value = params[name];
+	const task = readTask('', frontmatter);
+	if (!task) return result;
 
-				return value ? withParam(text, name, value) : text;
-			}, clear ? unchecked(line) : line);
+	const repeat = parseRepeat(task.repeat);
+	const all = allChecked(task);
+
+	if (all && !previous.all && task.doneDate === null) {
+		frontmatter[PROPS.doneDate] = today;
+		result.changed = true;
+
+		const date = repeat && task.date ? nextRepeatDate(task.date, repeat, task.move) : null;
+
+		if (date) {
+			frontmatter[PROPS.repeat] = null;
+			result.next = nextTaskOf(task, date);
 		}
 
-		const raw = lines[i].trimStart();
-
-		return '\t'.repeat(levels.get(i) ?? 0) + (clear ? unchecked(raw) : raw);
-	});
-};
-
-/**
- * Новый блок цепочки повтора: 📅 по расчёту, тот же 🔁, то же тело со снятыми
- * чекбоксами. Без ✅ - выполнение предыдущего к нему не относится.
- */
-export const repeatBlockLines = (
-	lines: string[],
-	block: ParsedBlock,
-	date: string
-): string[] => copiedBlock(lines, block, { date, repeat: block.params.repeat?.value }, true);
-
-/**
- * Блок отдельного дня череды, который отметили наперёд.
- *
- * **Без 🔁:** цепочку ведёт текущий блок, и второй блок с повтором наплодил бы
- * свою собственную череду. Этот блок отвечает только за свой день, а дошедшая до
- * него череда его перескочит (`nextFreeDate`).
- */
-export const occurrenceBlockLines = (
-	lines: string[],
-	block: ParsedBlock,
-	date: string
-): string[] => copiedBlock(lines, block, { date }, true);
-
-/**
- * Блок экземпляра повтора, перенесённого на другой день: 📅 - день череды, с
- * которого его перенесли, ↔️ - день, на который (правка от 03.11.2026, с
- * 05.11.2026 - при любом переносе повторной задачи). Показывается блок на ↔️, а
- * 📅 держит уехавший день занятым - дошедшая до него череда его перескочит. Без
- * 🔁, как у блока отмеченного наперёд дня.
- *
- * `keepMarks` - уехал день самого блока цепочки: экземпляр забирает свои
- * отметки. Уехал расчётный день - тело чистое: отмечать там было нечего.
- */
-export const movedBlockLines = (
-	lines: string[],
-	block: ParsedBlock,
-	origin: string,
-	date: string,
-	keepMarks = false
-): string[] => copiedBlock(
-	lines,
-	block,
-	{ date: origin, move: date === origin ? undefined : date },
-	!keepMarks
-);
-
-/**
- * Снять галочки подзадач - правками, не переписывая блок целиком. Галочка самой
- * задачи стоит в строке с параметрами и снимается вместе с ними, одной правкой
- * (`taskLineEdit` и `unchecked`).
- */
-export const clearSubtasksEdits = (lines: string[], block: ParsedBlock): Edit[] =>
-	block.body
-		.filter((i) => i !== block.start && isChecked(lines[i]))
-		.map((i) => ({ at: i, remove: 1, insert: [unchecked(lines[i])] }));
-
-/**
- * Место для **выполненного** блока - в конец, за последним.
- *
- * Так уходит вниз день, отмеченный наперёд: он закрыт, и в архиве ему самое
- * место. Уже лежащие блоки при этом не двигаются: ничего не сортируем и не
- * перекладываем, что где лежит - там и остаётся.
- *
- * Именно за последним блоком, а не в самый конец файла: там пустая строка,
- * которой файл заканчивается, и дописывать надо перед ней.
- */
-export const blockAppendAt = (blocks: ParsedBlock[]): number =>
-	blocks.length > 0 ? blocks[blocks.length - 1].end + 1 : 0;
-
-/**
- * Переключить чекбокс блока. `index` - порядковый номер сверху вниз, ровно как
- * их отрисовал рендер. Меняется один символ в одной строке.
- *
- * Возвращает null, если блока или чекбокса с таким номером нет: писать нечего.
- */
-export const toggleCheckboxEdit = (
-	lines: string[],
-	block: ParsedBlock,
-	index: number
-): Edit | null => {
-	const line = checkboxLines(lines, block)[index];
-	if (line === undefined) return null;
-
-	const parts = lines[line].match(CHECKBOX_LINE);
-	if (!parts) return null;
-
-	const mark = parts[2].toLowerCase() === 'x' ? ' ' : 'x';
-
-	return { at: line, remove: 1, insert: [`${parts[1]}${mark}${parts[3]}`] };
-};
-
-export const toggleCheckbox = (
-	content: string,
-	blockIndex: number,
-	index: number
-): string | null => {
-	const lines = content.split('\n');
-	const block = parseBlocks(lines).find((item) => item.index === blockIndex);
-	if (!block) return null;
-
-	const edit = toggleCheckboxEdit(lines, block, index);
-
-	return edit ? applyEdits(lines, [edit]).join('\n') : null;
-};
-
-/** Все чекбоксы блока отмечены. Блок без чекбоксов невалиден и сюда не доходит. */
-export const allChecked = (lines: string[], block: ParsedBlock): boolean => {
-	const boxes = checkboxLines(lines, block);
-
-	return boxes.length > 0 && boxes.every((i) => isChecked(lines[i]));
-};
-
-/**
- * Имя годового файла без расширения: `YYYY` по 📅 новой задачи (правка от
- * 30.10.2026, до этого файлы были месячными `YYYY-MM`). Год - по дате задачи, а
- * не по дню создания: задача на 5 января 2027, заведённая в декабре, ляжет в
- * `2027`. Уже лежащие месячные файлы остаются как есть и читаются как прежде.
- */
-export const yearFileName = (date: string): string => date.slice(0, 4);
-
-/**
- * Имя файла для сравнения по новизне. Годовой файл новее месячных своего года:
- * новые задачи пишутся в него после того, как месячные файлы отменили. Без этого
- * `2026` лексически меньше `2026-10`, и свежие задачи уходили бы под старые.
- */
-const newnessName = (fileName: string): string =>
-	/^\d{4}$/.test(fileName) ? `${fileName}-13` : fileName;
-
-/** Блок новой задачи: одна строка - снятый чекбокс с текстом и 📅 выбранного дня. */
-const newTaskLines = (date: string, text: string): string[] =>
-	[withParam(`- [ ] ${text}`, 'date', date)];
-
-/**
- * Текст нового месячного файла с одной задачей.
- *
- * Файл начинается пустой строкой и заканчивается пустой строкой - так его
- * удобнее продолжать руками, дописывая блоки сверху и снизу.
- */
-export const buildTaskFile = (date: string, text: string): string =>
-	['', ...newTaskLines(date, text), ''].join('\n');
-
-/**
- * Дописать задачу в уже существующий месячный файл - **под всеми задачами**,
- * сразу за последним блоком. Уже лежащие блоки не двигаются.
- *
- * Задач в файле нет: пустой файл получает тот же текст, что новый, а в файл с
- * чужим текстом блок дописывается в конец, через пустую строку от текста.
- */
-export const appendTaskBlock = (content: string, date: string, text: string): string => {
-	const lines = content.split('\n');
-	const blocks = parseBlocks(lines);
-	const block = newTaskLines(date, text);
-
-	if (blocks.length > 0) {
-		return applyEdits(lines, [{ at: blockAppendAt(blocks), remove: 0, insert: block }]).join('\n');
+		return result;
 	}
 
-	if (content.trim() === '') return buildTaskFile(date, text);
+	if (!all && previous.all && task.doneDate !== null) {
+		// Повтор не возвращается: следующий файл уже создан, задача стала обычной.
+		frontmatter[PROPS.doneDate] = null;
+		result.changed = true;
 
-	let end = lines.length;
-	while (end > 0 && lines[end - 1].trim() === '') end--;
+		return result;
+	}
 
-	return applyEdits(lines, [{ at: end, remove: 0, insert: ['', ...block] }]).join('\n');
+	if (task.move !== null && previous.move === null && task.doneDate === null && repeat && task.date) {
+		const date = nextRepeatDate(task.date, repeat, task.move);
+
+		if (date) {
+			frontmatter[PROPS.repeat] = null;
+			result.changed = true;
+			result.next = nextTaskOf(task, date);
+		}
+	}
+
+	return result;
 };
+
+/** Значения, которые YAML без кавычек прочитал бы не строкой. */
+const YAML_KEYWORD = /^(?:true|false|yes|no|on|off|null|~)$/i;
+/** Начало, которое YAML без кавычек понял бы как разметку или число. */
+const YAML_SPECIAL_START = /^[\s\-?:,[\]{}#&*!|>'"%@`+.\d]/;
+/** Внутри строки: «: », « #», двоеточие в конце, переводы строк и кавычки. */
+const YAML_SPECIAL_INSIDE = /: | #|:$|[\n\r\t"\\]/;
+
+/** Строка в YAML: без кавычек, если её нельзя прочитать иначе, иначе в JSON-кавычках. */
+const yamlString = (value: string): string =>
+	value !== value.trim()
+		|| YAML_KEYWORD.test(value)
+		|| YAML_SPECIAL_START.test(value)
+		|| YAML_SPECIAL_INSIDE.test(value)
+		? JSON.stringify(value)
+		: value;
+
+/** Строка свойства: пустое значение - ключ с двоеточием и ничего после. */
+const yamlLine = (key: string, value: string | boolean | null): string =>
+	value === null ? `${key}:` : `${key}: ${value}`;
 
 /**
- * Сравнение наименований одним общим коллатором: собирать его на каждое
- * сравнение (как делает localeCompare со строкой локали) заметно дороже.
+ * Текст файла новой задачи: все свойства шаблона, пустые - пустыми, галочки
+ * сняты. Даты пишутся как есть, тексты - в кавычках, когда без них YAML прочитал
+ * бы не то. Пустой текст - пустое `Задача:`: такой файл задачей не считается,
+ * пока его не заполнят.
  */
-const collator = new Intl.Collator('ru', {
-	numeric: true,
-	sensitivity: 'base',
-	ignorePunctuation: true,
-});
+export const buildTaskFile = (task: NewTask): string => {
+	const lines = [
+		'---',
+		yamlLine(PROPS.text, task.text ? yamlString(task.text) : null),
+		yamlLine(PROPS.checked, false),
+		yamlLine(PROPS.date, task.dateTime),
+		yamlLine(PROPS.doneDate, null),
+		yamlLine(PROPS.repeat, task.repeat ? yamlString(task.repeat) : null),
+		yamlLine(PROPS.move, null),
+	];
 
-/** Ключи второго уровня при равенстве: дата, имя файла, номер блока. */
-const compareTail = (a: Task, b: Task): number => {
-	const byDate = a.date.localeCompare(b.date);
-	if (byDate !== 0) return byDate;
+	task.subtasks.forEach((text, i) => {
+		lines.push(yamlLine(subtaskTextKey(i + 1), yamlString(text)));
+		lines.push(yamlLine(subtaskCheckedKey(i + 1), false));
+	});
 
-	const byFile = collator.compare(a.fileName, b.fileName);
-	if (byFile !== 0) return byFile;
+	lines.push('---', '');
 
-	return a.blockIndex - b.blockIndex;
+	return lines.join('\n');
 };
 
-/** По наименованию. Задача без ключа уходит в конец группы. */
-export const compareByName = (a: Task, b: Task): number => {
-	if (!a.sortKey || !b.sortKey) {
-		if (a.sortKey !== b.sortKey) return a.sortKey ? -1 : 1;
-	} else {
-		const byName = collator.compare(a.sortKey, b.sortKey);
+/** Имя файла задачи без расширения: время создания `ГГГГММДД_ЧЧММСС`. */
+export const taskFileName = (now: ReturnType<typeof moment>): string =>
+	now.format('YYYYMMDD_HHmmss');
+
+/** Имя, начинающееся со времени создания, - его ставит сам плагин. */
+const CREATED_NAME = /^\d{8}_\d{6}/;
+
+/**
+ * Сравнение имён одним общим коллатором: собирать его на каждое сравнение (как
+ * делает localeCompare со строкой локали) заметно дороже.
+ */
+const collator = new Intl.Collator('ru', { numeric: true, sensitivity: 'base' });
+
+/**
+ * Порядок по дате и времени из имени файла `ГГГГММДД_ЧЧММСС`, раньше выше. С
+ * 14.11.2026 список идёт по `Дата и время` (`compareByDateTime`), а этот порядок
+ * разводит только задачи с одинаковым `Дата и время`.
+ *
+ * `20261113_130215_2` ниже своего «тёзки» без суффикса: он создан позже в ту же
+ * секунду. Файл с другим именем (заведён руками) - ниже всех, между собой по
+ * имени. Одинаковые имена в разных папках - по пути.
+ */
+export const compareByCreation = (a: Task, b: Task): number => {
+	const createdA = CREATED_NAME.test(a.fileName);
+	const createdB = CREATED_NAME.test(b.fileName);
+	if (createdA !== createdB) return createdA ? -1 : 1;
+
+	if (a.fileName !== b.fileName) {
+		if (createdA) return a.fileName < b.fileName ? -1 : 1;
+
+		const byName = collator.compare(a.fileName, b.fileName);
 		if (byName !== 0) return byName;
 	}
 
-	return compareTail(a, b);
+	return a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
 };
 
 /**
- * По новизне, новое сверху. Так идут невыполненные - и просроченные, и задачи дня.
- *
- * Новая задача дописывается под все задачи своего файла, поэтому новизна - это
- * место блока: ниже в файле - новее. Между файлами сравниваются имена: у
- * годовых файлов это год `YYYY`, у прежних месячных - месяц `YYYY-MM`, и годовой
- * файл новее месячных своего года (`newnessName`).
- *
- * Время создания файла не годится: на части файловых систем это время последней
- * смены статуса, и оно сдвигается с каждой записью.
+ * Порядок списка - по `Дата и время`, раньше выше: сверху ближайшие (просьба
+ * пользователя 14.11.2026, вместо групп и порядка по имени файла). День показа и
+ * повтор не влияют. Без даты - ниже всех. Одинаковое время - раньше созданный
+ * файл выше.
  */
-export const compareByNewness = (a: Task, b: Task): number => {
-	const nameA = newnessName(a.fileName);
-	const nameB = newnessName(b.fileName);
+export const compareByDateTime = (a: Task, b: Task): number => {
+	if (a.dateTime !== b.dateTime) {
+		if (a.dateTime === null) return 1;
+		if (b.dateTime === null) return -1;
 
-	if (nameA !== nameB) return nameA < nameB ? 1 : -1;
-	if (a.filePath !== b.filePath) return a.filePath < b.filePath ? 1 : -1;
+		return a.dateTime < b.dateTime ? -1 : 1;
+	}
 
-	return b.blockIndex - a.blockIndex;
+	return compareByCreation(a, b);
 };
 
-/** Задача просрочена: её дата в прошлом и ✅ нет. */
-export const isOverdue = (task: Task, today: string): boolean =>
-	task.done === null && showDate(task) < today;
+/**
+ * Порядок полного списка: просроченные первыми - отдельным правилом (просьба
+ * пользователя 14.11.2026), дальше `compareByDateTime`. Без правила перенесённая
+ * задача вставала бы по `Дата и время`, а не по дню показа: просроченная по
+ * переносу ушла бы вниз, к будущим.
+ */
+export const compareOverdueFirst = (today: string) => (a: Task, b: Task): number => {
+	const overdueA = isOverdue(a, today);
+	if (overdueA !== isOverdue(b, today)) return overdueA ? -1 : 1;
+
+	return compareByDateTime(a, b);
+};

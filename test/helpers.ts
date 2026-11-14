@@ -1,11 +1,13 @@
 import { vi } from 'vitest';
-import { App, Vault } from './mocks/obsidian';
+import { App, stringifyFrontmatter, Vault } from './mocks/obsidian';
 import { TaskMap } from '../src/taskMap';
+import { DEFAULT_SETTINGS } from '../src/types';
 import type TaskCalendarPlugin from '../src/TaskCalendarPlugin';
 
 /**
  * Фиксированное «сегодня» для всех тестов: четверг, 13 августа 2026.
- * Август 2026 начинается в субботу, поэтому сетка стартует с 27 июля.
+ * Август 2026 начинается в субботу, поэтому сетка стартует с 27 июля. Неделя
+ * сегодняшнего дня кончается в воскресенье 16 августа.
  */
 export const TODAY = '2026-08-13';
 
@@ -19,47 +21,50 @@ export const useFixedClock = (date = `${TODAY}T12:00:00`): void => {
 	vi.setSystemTime(new Date(date));
 };
 
-export interface TaskBlockFixture {
-	/** 📅 - обязательный параметр блока. */
-	date?: string;
-	/** ↔️ - день показа перенесённого экземпляра. */
-	move?: string | null;
-	/** 🔁 - текст повтора. */
-	repeat?: string | null;
-	/** ✅ - отметка выполнения. */
-	done?: string | null;
+export interface TaskFixture {
+	/** `Задача`. */
+	text?: string;
+	/** `Выполнено`. */
+	checked?: boolean;
 	/**
-	 * Тело: первая строка - строка задачи, параметры дописываются к ней сами;
-	 * остальные - подзадачи со своим отступом.
+	 * `Дата и время`: день со временем или один день (читается как полночь). По
+	 * умолчанию сегодня; null - пустое свойство.
 	 */
-	body?: string[];
+	date?: string | null;
+	/** `Дата выполнения`. */
+	doneDate?: string | null;
+	/** `Повтор`. */
+	repeat?: string | null;
+	/** `Дата переноса`. */
+	move?: string | null;
+	/** Подзадачи парами: текст и галочка. */
+	subtasks?: [string, boolean][];
+	/** Текст под блоком свойств. */
+	body?: string;
 }
 
-/** Строки одного блока задачи: параметры в каноническом порядке в конце строки задачи. */
-export const taskBlockLines = (block: TaskBlockFixture = {}): string[] => {
-	const [task, ...subtasks] = block.body ?? ['- [ ] Задача'];
-	const params = [`📅 ${block.date ?? TODAY}`];
+/** Свойства задачи в порядке шаблона: так файл пишет и сам плагин. */
+export const taskProps = (task: TaskFixture = {}): Record<string, unknown> => {
+	const props: Record<string, unknown> = {
+		Задача: task.text ?? 'Задача',
+		Выполнено: task.checked ?? false,
+		'Дата и время': task.date === undefined ? TODAY : task.date,
+		'Дата выполнения': task.doneDate ?? null,
+		Повтор: task.repeat ?? null,
+		'Дата переноса': task.move ?? null,
+	};
 
-	if (block.move) params.push(`↔️ ${block.move}`);
-	if (block.repeat) params.push(`🔁 ${block.repeat}`);
-	if (block.done) params.push(`✅ ${block.done}`);
+	(task.subtasks ?? []).forEach(([text, checked], i) => {
+		props[`Подзадача-${i + 1}`] = text;
+		props[`Подзадача-${i + 1}-выполнено`] = checked;
+	});
 
-	return [`${task} ${params.join(' ')}`, ...subtasks];
+	return props;
 };
 
-/**
- * Текст файла задачи: блоки подряд, пустая строка в начале и в конце - ровно
- * так, как файл пишет сам плагин.
- */
-export const taskFileText = (...blocks: TaskBlockFixture[]): string => {
-	const lines: string[] = [''];
-
-	for (const block of (blocks.length > 0 ? blocks : [{}])) lines.push(...taskBlockLines(block));
-
-	lines.push('');
-
-	return lines.join('\n');
-};
+/** Текст файла задачи: блок свойств и, если задан, текст под ним. */
+export const taskFileText = (task: TaskFixture = {}): string =>
+	`${stringifyFrontmatter(taskProps(task))}\n${task.body ?? ''}`;
 
 export interface PluginDoubleOptions {
 	/** Содержимое хранилища: путь -> текст файла. */
@@ -68,6 +73,8 @@ export interface PluginDoubleOptions {
 	folders?: string[];
 	/** Папка для новых задач - значение настройки плагина. */
 	tasksFolderPath?: string;
+	/** Календарь в списке. По умолчанию выключен, как у плагина. */
+	calendarInList?: boolean;
 }
 
 export interface PluginDouble {
@@ -75,19 +82,36 @@ export interface PluginDouble {
 	app: App;
 	vault: Vault;
 	taskMap: TaskMap;
+	/** Подписчики смены настроек - чтобы проверить отписку. */
+	settingsListeners: Set<() => void>;
 }
 
-/** Плагин-двойник: карте задач нужны app и settings, компоненту - ещё и карта. */
+/**
+ * Плагин-двойник: карте задач нужны app и settings, компонентам - ещё и карта.
+ * `saveSettings` зовёт подписчиков `onSettingsChange`, как настоящий плагин.
+ */
 export const createPluginDouble = ({
 	files = {},
 	folders = [],
 	tasksFolderPath = '/',
+	calendarInList = DEFAULT_SETTINGS.calendarInList,
 }: PluginDoubleOptions = {}): PluginDouble => {
 	const app = new App(new Vault(files, folders));
+	const settingsListeners = new Set<() => void>();
 
 	const plugin = {
 		app,
-		settings: { tasksFolderPath },
+		settings: { tasksFolderPath, calendarInList },
+		saveSettings: vi.fn(async () => {
+			for (const listener of settingsListeners) listener();
+		}),
+		onSettingsChange: (listener: () => void) => {
+			settingsListeners.add(listener);
+
+			return () => {
+				settingsListeners.delete(listener);
+			};
+		},
 	} as unknown as TaskCalendarPlugin;
 
 	const taskMap = new TaskMap(plugin);
@@ -98,5 +122,6 @@ export const createPluginDouble = ({
 		app,
 		vault: app.vault,
 		taskMap,
+		settingsListeners,
 	};
 };

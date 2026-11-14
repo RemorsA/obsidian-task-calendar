@@ -37,40 +37,9 @@ const cellFor = (wrapper: VueWrapper, date: string, gridStart = GRID_START) => {
 const hasDot = (wrapper: VueWrapper, date: string): boolean =>
 	cellFor(wrapper, date).find('.week-day--dot').exists();
 
-/**
- * Порядок карточек в списке: просроченные, задачи дня, выполненные. Разделителей
- * между ними нет - порядок и вид карточки и есть вся разметка.
- */
-const itemKinds = (wrapper: VueWrapper): string[] =>
-	wrapper.findAll('.tasks__item').map((item) => {
-		if (item.classes('--is-overdue')) return 'просроченная';
-
-		return item.classes('--is-done') ? 'выполненная' : 'дня';
-	});
-
-/** Тексты карточек - по ним видно, что и в каком порядке показано. */
-const itemTexts = (wrapper: VueWrapper): string[] =>
-	wrapper.findAll('.tasks__item-body').map((body) => body.text().trim());
-
 /** Дать сработать debounce событий хранилища. */
 const settle = async () => {
 	await vi.advanceTimersByTimeAsync(300);
-	await flushPromises();
-};
-
-const clickDay = async (wrapper: VueWrapper, date: string) => {
-	await cellFor(wrapper, date).trigger('click');
-	await flushPromises();
-};
-
-/** Поменять дату у карточки штатным полем выбора. */
-const pickDate = async (wrapper: VueWrapper, item: number, date: string) => {
-	const card = wrapper.findAll('.tasks__item')[item];
-	await card.find('.tasks__item-date-button').trigger('click');
-
-	const input = card.find('.tasks__item-date-input');
-	(input.element as HTMLInputElement).value = date;
-	await input.trigger('change');
 	await flushPromises();
 };
 
@@ -97,25 +66,30 @@ describe('сетка календаря', () => {
 
 		expect(wrapper.find('.calendar__header-month-year-button').text()).toBe('Август 2026');
 		expect(cellFor(wrapper, TODAY).classes()).toContain('--is-today');
+		expect(cellFor(wrapper, GRID_START).classes()).toContain('--is-other-month');
 	});
 
-	it('выбранный день по умолчанию сегодняшний', async () => {
+	it('день не выбирается: ячейка не кнопка, клик ничего не меняет', async () => {
 		const { wrapper } = await mountCalendar();
+		const cell = cellFor(wrapper, '2026-08-20');
 
-		expect(cellFor(wrapper, TODAY).classes()).toContain('--is-focused');
+		expect(cell.element.tagName).toBe('DIV');
+
+		const before = wrapper.html();
+		await cell.trigger('click');
+
+		expect(wrapper.html()).toBe(before);
+		expect(wrapper.emitted('select')).toBeUndefined();
+		expect(wrapper.find('.--is-focused').exists()).toBe(false);
 	});
 
-	it('клик по дню переносит выделение', async () => {
-		const { wrapper } = await mountCalendar();
+	it('списка задач и поля создания под сеткой нет', async () => {
+		const { wrapper } = await mountCalendar({ files: { 'a.md': taskFileText() } });
 
-		await clickDay(wrapper, '2026-08-20');
-
-		expect(cellFor(wrapper, '2026-08-20').classes()).toContain('--is-focused');
-		expect(cellFor(wrapper, TODAY).classes()).not.toContain('--is-focused');
+		expect(wrapper.find('.tasks__item').exists()).toBe(false);
+		expect(wrapper.find('.task__calendar-create').exists()).toBe(false);
 	});
-});
 
-describe('навигация по месяцам', () => {
 	it('листает назад и вперёд', async () => {
 		const { wrapper } = await mountCalendar();
 
@@ -140,6 +114,41 @@ describe('навигация по месяцам', () => {
 	});
 });
 
+describe('выбор дня в списке', () => {
+	/** Календарь, как его ставит список: с выбранным днём. */
+	const mountSelectable = async (selectedDate = TODAY) => {
+		const context = createPluginDouble();
+		const wrapper = mount(TaskCalendar, { props: { plugin: context.plugin, selectedDate } });
+		await flushPromises();
+
+		return wrapper;
+	};
+
+	it('ячейка - кнопка, выбранный день помечен --is-focused', async () => {
+		const wrapper = await mountSelectable('2026-08-20');
+		const cell = cellFor(wrapper, '2026-08-20');
+
+		expect(cell.element.tagName).toBe('BUTTON');
+		expect(cell.attributes('type')).toBe('button');
+		expect(cell.attributes('aria-pressed')).toBe('true');
+		expect(cell.classes()).toContain('--is-focused');
+		expect(wrapper.findAll('.--is-focused')).toHaveLength(1);
+		expect(cellFor(wrapper, TODAY).classes()).toContain('--is-today');
+	});
+
+	it('клик по дню сообщает его списку, выбирает день сам список', async () => {
+		const wrapper = await mountSelectable();
+
+		await cellFor(wrapper, GRID_START).trigger('click');
+
+		expect(wrapper.emitted('select')).toEqual([[GRID_START]]);
+
+		await wrapper.setProps({ selectedDate: GRID_START });
+		expect(cellFor(wrapper, GRID_START).classes()).toContain('--is-focused');
+		expect(cellFor(wrapper, TODAY).classes()).not.toContain('--is-focused');
+	});
+});
+
 describe('точки на днях', () => {
 	it('точка на дне невыполненной задачи, и в прошлом, и в будущем', async () => {
 		const { wrapper } = await mountCalendar({
@@ -154,864 +163,81 @@ describe('точки на днях', () => {
 		expect(hasDot(wrapper, '2026-08-11')).toBe(false);
 	});
 
-	it('выполненная задача точку не даёт', async () => {
+	it('выполненная задача и задача без даты точки не дают', async () => {
 		const { wrapper } = await mountCalendar({
 			files: {
-				'note.md': taskFileText({
-					date: '2026-08-20',
-					done: '2026-08-20',
-					body: ['- [x] Задача'],
-				}),
+				'выполнена.md': taskFileText({ date: '2026-08-20', checked: true, doneDate: '2026-08-20' }),
+				'без даты.md': taskFileText({ date: null }),
 			},
 		});
 
-		expect(hasDot(wrapper, '2026-08-20')).toBe(false);
+		expect(wrapper.findAll('.week-day--dot')).toHaveLength(0);
 	});
 
-
-	it('блок без чекбоксов точки не даёт', async () => {
+	it('перенесённая задача - точка на дне переноса', async () => {
 		const { wrapper } = await mountCalendar({
-			files: { 'note.md': taskFileText({ date: '2026-08-20', body: ['- Просто пункт'] }) },
+			files: { 'a.md': taskFileText({ date: '2026-08-15', move: '2026-08-18' }) },
 		});
 
-		expect(hasDot(wrapper, '2026-08-20')).toBe(false);
+		expect(hasDot(wrapper, '2026-08-15')).toBe(false);
+		expect(hasDot(wrapper, '2026-08-18')).toBe(true);
+	});
+
+	it('повтор: точки на всех будущих днях после «Дата», до неё - нет', async () => {
+		const { wrapper } = await mountCalendar({
+			files: { 'a.md': taskFileText({ date: '2026-08-15', repeat: 'Каждую неделю Суббота, Воскресенье' }) },
+		});
+
+		const days = ['2026-08-15', '2026-08-16', '2026-08-22', '2026-08-23', '2026-08-29', '2026-08-30', '2026-09-05', '2026-09-06'];
+
+		for (const day of days) expect(hasDot(wrapper, day), day).toBe(true);
+		expect(hasDot(wrapper, '2026-08-08')).toBe(false);
+		expect(hasDot(wrapper, '2026-08-17')).toBe(false);
+	});
+
+	it('повтор досчитывается в следующем месяце', async () => {
+		const { wrapper } = await mountCalendar({
+			files: { 'a.md': taskFileText({ date: '2026-08-13', repeat: 'Каждый месяц' }) },
+		});
+
+		await wrapper.find('.calendar__header-next-button').trigger('click');
+
+		// Сетка сентября начинается с 31 августа.
+		expect(cellFor(wrapper, '2026-09-13', '2026-08-31').find('.week-day--dot').exists()).toBe(true);
+		expect(cellFor(wrapper, '2026-09-12', '2026-08-31').find('.week-day--dot').exists()).toBe(false);
+	});
+
+	it('у выполненного повтора и нераспознанного повтора дни не размножаются', async () => {
+		const { wrapper } = await mountCalendar({
+			files: {
+				'выполнен.md': taskFileText({ date: '2026-08-14', checked: true, doneDate: TODAY, repeat: 'Каждый день' }),
+				'кривой.md': taskFileText({ date: '2026-08-20', repeat: 'Каждую ндлю' }),
+			},
+		});
+
+		expect(hasDot(wrapper, '2026-08-15')).toBe(false);
+		expect(hasDot(wrapper, '2026-08-20')).toBe(true);
+		expect(hasDot(wrapper, '2026-08-27')).toBe(false);
 	});
 });
 
-describe('список задач', () => {
-	it('показывает задачи выбранного дня и только их тело', async () => {
-		const { wrapper } = await mountCalendar({
-			files: {
-				'note.md': taskFileText({
-					date: TODAY,
-					repeat: 'Каждый день',
-					body: ['- [ ] Купить молоко'],
-				}),
-			},
+describe('связь с картой', () => {
+	it('правка файла сразу видна на точках', async () => {
+		const { wrapper, vault } = await mountCalendar({
+			files: { 'a.md': taskFileText({ date: '2026-08-20' }) },
 		});
 
-		expect(itemTexts(wrapper)).toEqual(['Купить молоко']);
-		expect(wrapper.text()).not.toContain('Каждый день');
-	});
+		await vault.modify(new TFile('a.md'), taskFileText({ date: '2026-08-21' }));
+		await settle();
 
-	it('у повторяющейся карточки особой рамки нет', async () => {
-		const { wrapper } = await mountCalendar({
-			files: { 'note.md': taskFileText({ date: TODAY, repeat: 'Каждый день' }) },
-		});
-
-		expect(wrapper.find('.tasks__item').classes()).toEqual(['tasks__item']);
-	});
-
-	it('в пустом дне карточек нет', async () => {
-		const { wrapper } = await mountCalendar({
-			files: { 'note.md': taskFileText({ date: '2026-08-20' }) },
-		});
-
-		expect(wrapper.findAll('.tasks__item')).toHaveLength(0);
-	});
-
-	it('порядок групп: просроченные, задачи дня, выполненные', async () => {
-		const { wrapper } = await mountCalendar({
-			files: {
-				'долг.md': taskFileText({ date: '2026-08-10', body: ['- [ ] Долг'] }),
-				'дело.md': taskFileText({ date: TODAY, body: ['- [ ] Дело'] }),
-				'готово.md': taskFileText({
-					date: TODAY,
-					done: TODAY,
-					body: ['- [x] Готово'],
-				}),
-			},
-		});
-
-		expect(itemKinds(wrapper)).toEqual(['просроченная', 'дня', 'выполненная']);
-		expect(itemTexts(wrapper)).toEqual(['Долг', 'Дело', 'Готово']);
-	});
-
-	it('в дне сначала обычные задачи, потом повторяющиеся - даже если повтор новее', async () => {
-		const { wrapper } = await mountCalendar({
-			files: {
-				'2026-08.md': taskFileText(
-					{ date: TODAY, body: ['- [ ] Обычная'] },
-					{ date: TODAY, repeat: 'Каждый день', body: ['- [ ] Повтор'] },
-				),
-			},
-		});
-
-		expect(itemTexts(wrapper)).toEqual(['Обычная', 'Повтор']);
-	});
-
-	it('порядок: просроченные, обычные, повторяющиеся с расчётными днями, закрытые', async () => {
-		const { wrapper } = await mountCalendar({
-			files: {
-				'2026-08.md': taskFileText(
-					{ date: '2026-08-15', body: ['- [ ] Обычная старая'] },
-					{ date: TODAY, repeat: 'Каждый день', body: ['- [ ] Ежедневная'] },
-					{ date: '2026-08-15', body: ['- [ ] Обычная новая'] },
-					{ date: '2026-08-15', done: TODAY, body: ['- [x] Готово'] },
-					{ date: '2026-08-10', body: ['- [ ] Долг'] },
-				),
-			},
-		});
-
-		await clickDay(wrapper, '2026-08-15');
-
-		expect(itemKinds(wrapper)).toEqual(['просроченная', 'дня', 'дня', 'дня', 'выполненная']);
-		// Внутри обычных - новое сверху; «Ежедневная» на 15-е - расчётный день череды.
-		expect(itemTexts(wrapper)).toEqual([
-			'Долг',
-			'Обычная новая',
-			'Обычная старая',
-			'Ежедневная',
-			'Готово',
-		]);
-	});
-
-	it('просроченные видны в списке любого выбранного дня', async () => {
-		const { wrapper } = await mountCalendar({
-			files: { 'долг.md': taskFileText({ date: '2026-08-10', body: ['- [ ] Долг'] }) },
-		});
-
-		await clickDay(wrapper, '2026-08-25');
-
-		expect(itemKinds(wrapper)).toEqual(['просроченная']);
-	});
-
-	it('на своём дне просроченная не задваивается', async () => {
-		const { wrapper } = await mountCalendar({
-			files: { 'долг.md': taskFileText({ date: '2026-08-10', body: ['- [ ] Долг'] }) },
-		});
-
-		await clickDay(wrapper, '2026-08-10');
-
-		expect(itemKinds(wrapper)).toEqual(['просроченная']);
-	});
-
-	it('просроченные - новое сверху, дата долга не влияет', async () => {
-		const { wrapper } = await mountCalendar({
-			files: {
-				'2026-08.md': taskFileText(
-					{ date: '2026-08-12', body: ['- [ ] Заведена раньше'] },
-					{ date: '2026-08-01', body: ['- [ ] Заведена позже'] },
-				),
-			},
-		});
-
-		expect(itemKinds(wrapper)).toEqual(['просроченная', 'просроченная']);
-		expect(itemTexts(wrapper)).toEqual(['Заведена позже', 'Заведена раньше']);
-	});
-
-	it('задачи дня - новое сверху: ниже в файле и в более позднем месяце', async () => {
-		const { wrapper } = await mountCalendar({
-			files: {
-				'2026-08.md': taskFileText(
-					{ date: TODAY, body: ['- [ ] Абрикос'] },
-					{ date: TODAY, body: ['- [ ] Яблоко'] },
-				),
-				// Блок перенесли сюда из июльской задачи - она заведена раньше.
-				'2026-07.md': taskFileText({ date: '2026-07-30', move: TODAY, body: ['- [ ] Груша'] }),
-			},
-		});
-
-		expect(itemTexts(wrapper)).toEqual(['Яблоко', 'Абрикос', 'Груша']);
-	});
-
-	it('выполненные - внизу и по наименованию', async () => {
-		const { wrapper } = await mountCalendar({
-			files: {
-				'2026-08.md': taskFileText(
-					{ date: TODAY, done: TODAY, body: ['- [x] Абрикос'] },
-					{ date: TODAY, body: ['- [ ] Дело'] },
-					{ date: TODAY, done: TODAY, body: ['- [x] Яблоко'] },
-				),
-			},
-		});
-
-		expect(itemKinds(wrapper)).toEqual(['дня', 'выполненная', 'выполненная']);
-		expect(itemTexts(wrapper)).toEqual(['Дело', 'Абрикос', 'Яблоко']);
-	});
-
-	it('выполненная показывается целиком, с отмеченными чекбоксами', async () => {
-		const { wrapper } = await mountCalendar({
-			files: {
-				'note.md': taskFileText({
-					date: TODAY,
-					done: TODAY,
-					body: ['- [x] Раз', '\t- [x] Два'],
-				}),
-			},
-		});
-
-		const boxes = wrapper.findAll('.tasks__item.--is-done input.task-list-item-checkbox');
-
-		expect(boxes).toHaveLength(2);
-		expect(boxes.every((box) => (box.element as HTMLInputElement).checked)).toBe(true);
-	});
-
-	it('группа выполненных считается по ✅, а не по галочкам', async () => {
-		const { wrapper } = await mountCalendar({
-			files: {
-				// Все галочки сняты, но ✅ написали руками - задача выполненная.
-				'note.md': taskFileText({ date: TODAY, done: TODAY, body: ['- [ ] Дело'] }),
-			},
-		});
-
-		expect(itemKinds(wrapper)).toEqual(['выполненная']);
-	});
-
-	it('перенесённая задача стоит в новом дне, череда - в своём', async () => {
-		const { wrapper } = await mountCalendar({
-			files: {
-				'note.md': taskFileText({
-					date: TODAY,
-					repeat: 'Каждый день',
-					body: ['- [ ] Дело'],
-				}),
-			},
-		});
-
-		await pickDate(wrapper, 0, '2026-08-20');
-
-		// Экземпляр уехал на 20-е, череда шагнула на следующий день.
-		expect(wrapper.findAll('.tasks__item')).toHaveLength(0);
-
-		await clickDay(wrapper, '2026-08-20');
-		expect(itemTexts(wrapper)).toEqual(['Дело']);
-
-		await clickDay(wrapper, '2026-08-14');
-		expect(itemTexts(wrapper)).toEqual(['Дело']);
-	});
-});
-
-describe('череда повтора в календаре', () => {
-	const weekend = {
-		files: {
-			'note.md': taskFileText({
-				date: '2026-08-22',
-				repeat: 'Каждую неделю в Субботу, Воскресенье',
-				body: ['- [ ] Дело'],
-			}),
-		},
-	};
-
-	it('точки стоят на всех днях череды после 📅', async () => {
-		const { wrapper } = await mountCalendar(weekend);
-
-		for (const day of ['2026-08-22', '2026-08-23', '2026-08-29', '2026-08-30', '2026-09-05']) {
-			expect(hasDot(wrapper, day), day).toBe(true);
-		}
-	});
-
-	it('чужая задача в том же файле череду не прерывает', async () => {
-		const { wrapper } = await mountCalendar({
-			files: {
-				'2026-08.md': taskFileText(
-					{ date: '2026-08-22', repeat: 'Каждый день', body: ['- [ ] Полить фикус'] },
-					{ date: '2026-08-24', body: ['- [ ] Позвонить'] },
-				),
-			},
-		});
-
-		await clickDay(wrapper, '2026-08-24');
-
-		expect(itemTexts(wrapper).sort()).toEqual(['Позвонить', 'Полить фикус']);
-	});
-
-	it('до 📅 точек нет: задачи тогда ещё не было', async () => {
-		const { wrapper } = await mountCalendar(weekend);
-
-		for (const day of ['2026-08-15', '2026-08-16']) {
-			expect(hasDot(wrapper, day), day).toBe(false);
-		}
-	});
-
-	it('в будни череды нет', async () => {
-		const { wrapper } = await mountCalendar(weekend);
-
-		expect(hasDot(wrapper, '2026-08-25')).toBe(false);
-	});
-
-	it('у выполненной задачи череда не рисуется', async () => {
-		const { wrapper } = await mountCalendar({
-			files: {
-				'note.md': taskFileText({
-					date: '2026-08-22',
-					repeat: 'Каждый день',
-					done: '2026-08-22',
-					body: ['- [x] Дело'],
-				}),
-			},
-		});
-
-		expect(hasDot(wrapper, '2026-08-23')).toBe(false);
-	});
-
-	it('у разовой задачи череды нет', async () => {
-		const { wrapper } = await mountCalendar({
-			files: { 'note.md': taskFileText({ date: '2026-08-22' }) },
-		});
-
-		expect(hasDot(wrapper, '2026-08-22')).toBe(true);
-		expect(hasDot(wrapper, '2026-08-23')).toBe(false);
-	});
-
-	it('на расчётном дне череды показывается карточка', async () => {
-		const { wrapper } = await mountCalendar(weekend);
-
-		await clickDay(wrapper, '2026-08-29');
-
-		expect(itemKinds(wrapper)).toEqual(['дня']);
-		expect(itemTexts(wrapper)).toEqual(['Дело']);
-	});
-
-	it('отметка на расчётном дне выполняет только этот день', async () => {
-		const { wrapper, vault } = await mountCalendar(weekend);
-
-		await clickDay(wrapper, '2026-08-29');
-		await wrapper.find('input.task-list-item-checkbox').trigger('click');
-		await flushPromises();
-
-		const content = vault.contentOf('note.md') ?? '';
-
-		// У дня появился свой блок, текущий остался на своём месте.
-		expect(content).toContain(`- [x] Дело 📅 2026-08-29 ✅ ${TODAY}`);
-		expect(content).toContain('- [ ] Дело 📅 2026-08-22 🔁 Каждую неделю в Субботу, Воскресенье');
-		expect(itemKinds(wrapper)).toEqual(['выполненная']);
-	});
-
-	it('выполненный наперёд день теряет точку, остальная череда на месте', async () => {
-		const { wrapper } = await mountCalendar(weekend);
-
-		await clickDay(wrapper, '2026-08-29');
-		await wrapper.find('input.task-list-item-checkbox').trigger('click');
-		await flushPromises();
-
-		expect(hasDot(wrapper, '2026-08-29')).toBe(false);
-		expect(hasDot(wrapper, '2026-08-22')).toBe(true);
-		expect(hasDot(wrapper, '2026-08-23')).toBe(true);
-		expect(hasDot(wrapper, '2026-08-30')).toBe(true);
-	});
-
-	it('на дне со своим блоком расчётной карточки нет', async () => {
-		const { wrapper } = await mountCalendar(weekend);
-
-		await clickDay(wrapper, '2026-08-29');
-		await wrapper.find('input.task-list-item-checkbox').trigger('click');
-		await flushPromises();
-
-		// Одна карточка: блок этого дня. Расчёт от текущего блока его перескочил.
-		expect(wrapper.findAll('.tasks__item')).toHaveLength(1);
-	});
-
-	it('череда перескакивает выполненный наперёд день', async () => {
-		const { wrapper, vault } = await mountCalendar(weekend);
-
-		await clickDay(wrapper, '2026-08-29');
-		await wrapper.find('input.task-list-item-checkbox').trigger('click');
-		await flushPromises();
-
-		// Закрываем текущий день, потом следующий: 29-е занято, череда идёт на 30-е.
-		await clickDay(wrapper, '2026-08-22');
-		await wrapper.find('.tasks__item:not(.--is-done) input.task-list-item-checkbox')
-			.trigger('click');
-		await flushPromises();
-
-		await clickDay(wrapper, '2026-08-23');
-		await wrapper.find('.tasks__item:not(.--is-done) input.task-list-item-checkbox')
-			.trigger('click');
-		await flushPromises();
-
-		expect(vault.contentOf('note.md')).toContain('📅 2026-08-30 🔁');
-		expect(hasDot(wrapper, '2026-08-30')).toBe(true);
-	});
-
-	it('после переноса назад точка череды встаёт на следующий повтор', async () => {
-		const { wrapper } = await mountCalendar({
-			files: {
-				'note.md': taskFileText({
-					date: '2026-08-22',
-					repeat: 'Каждую неделю в Субботу',
-					body: ['- [ ] Полить фикус'],
-				}),
-			},
-		});
-
-		await clickDay(wrapper, '2026-08-22');
-		await pickDate(wrapper, 0, '2026-08-21');
-
-		// Суббота 22-го отработана перенесённым экземпляром, череда - на 29-м.
+		expect(hasDot(wrapper, '2026-08-20')).toBe(false);
 		expect(hasDot(wrapper, '2026-08-21')).toBe(true);
-		expect(hasDot(wrapper, '2026-08-22')).toBe(false);
-		expect(hasDot(wrapper, '2026-08-29')).toBe(true);
 	});
 
-	it('просроченная задача расчётной карточкой не задваивается', async () => {
-		const { wrapper } = await mountCalendar({
-			files: {
-				'note.md': taskFileText({
-					date: '2026-08-10',
-					repeat: 'Каждый день',
-					body: ['- [ ] Долг'],
-				}),
-			},
-		});
+	it('карту поднимает сам календарь, если плагин ещё не успел', async () => {
+		const { wrapper } = await mountCalendar({ files: { 'a.md': taskFileText({ date: '2026-08-20' }) } });
 
-		await clickDay(wrapper, '2026-08-20');
-
-		expect(itemKinds(wrapper)).toEqual(['просроченная']);
-	});
-});
-
-describe('кнопки карточки', () => {
-	it('кнопка перехода открывает заметку на правку и подсвечивает блок', async () => {
-		const { wrapper, app } = await mountCalendar({
-			files: { 'Задачи/note.md': taskFileText({ date: TODAY }) },
-		});
-
-		await wrapper.find('.tasks__item-link-button').trigger('click');
-		await flushPromises();
-
-		// Строка 0 - пустая, блок - одна строка задачи на 1-й.
-		expect(app.workspace.openLinkCalls).toEqual([{
-			linktext: 'Задачи/note.md',
-			sourcePath: '',
-			newLeaf: false,
-			openViewState: {
-				state: { mode: 'source' },
-				eState: {
-					line: 1,
-					startLoc: { line: 1, col: 0 },
-					endLoc: { line: 1, col: `- [ ] Задача 📅 ${TODAY}`.length },
-				},
-			},
-		}]);
-	});
-
-	it('подсвечивается блок своей карточки, а не первый в файле', async () => {
-		const { wrapper, app } = await mountCalendar({
-			files: {
-				'note.md': taskFileText(
-					{ date: '2026-08-20', body: ['- [ ] Потом'] },
-					{ date: TODAY, body: ['- [ ] Сегодня', '\t- [ ] Подпункт'] },
-				),
-			},
-		});
-
-		// Карточка одна - сегодняшняя, второй блок файла.
-		expect(wrapper.findAll('.tasks__item')).toHaveLength(1);
-
-		await wrapper.find('.tasks__item-link-button').trigger('click');
-		await flushPromises();
-
-		expect(app.workspace.openLinkCalls[0].openViewState).toMatchObject({
-			eState: {
-				line: 2,
-				startLoc: { line: 2, col: 0 },
-				endLoc: { line: 3, col: '\t- [ ] Подпункт'.length },
-			},
-		});
-	});
-
-	it('файл не прочитался - заметка всё равно открывается, без подсветки', async () => {
-		const { wrapper, app, vault } = await mountCalendar({
-			files: { 'note.md': taskFileText({ date: TODAY }) },
-		});
-		vi.spyOn(console, 'error').mockImplementation(() => {});
-		vault.failures.read = new Set(['note.md']);
-
-		await wrapper.find('.tasks__item-link-button').trigger('click');
-		await flushPromises();
-
-		expect(app.workspace.openLinkCalls).toEqual([{
-			linktext: 'note.md',
-			sourcePath: '',
-			newLeaf: false,
-			openViewState: { state: { mode: 'source' } },
-		}]);
-	});
-
-	it('в поле выбора даты стоит 📅 карточки', async () => {
-		const { wrapper } = await mountCalendar({
-			files: { 'note.md': taskFileText({ date: TODAY, repeat: 'Каждый день' }) },
-		});
-
-		expect((wrapper.find('.tasks__item-date-input').element as HTMLInputElement).value)
-			.toBe(TODAY);
-	});
-
-	it('у задачи с 🔁 перенос выносит экземпляр вниз с ↔️ новой даты и двигает череду', async () => {
-		const { wrapper, vault } = await mountCalendar({
-			files: { 'note.md': taskFileText({ date: TODAY, repeat: 'Каждый день' }) },
-		});
-
-		await pickDate(wrapper, 0, '2026-08-20');
-
-		expect(vault.contentOf('note.md')).toBe([
-			'',
-			'- [ ] Задача 📅 2026-08-14 🔁 Каждый день',
-			'- [ ] Задача 📅 2026-08-13 ↔️ 2026-08-20',
-			'',
-		].join('\n'));
-
-		// Точка уехала на новый день: своего дня у перенесённого больше нет.
-		expect(hasDot(wrapper, TODAY)).toBe(false);
 		expect(hasDot(wrapper, '2026-08-20')).toBe(true);
-		// А череда стоит на следующем свободном дне.
-		expect(hasDot(wrapper, '2026-08-14')).toBe(true);
-	});
-
-	it('у задачи без повтора выбор даты двигает саму 📅', async () => {
-		const { wrapper, vault } = await mountCalendar({
-			files: { 'note.md': taskFileText({ date: TODAY }) },
-		});
-
-		await pickDate(wrapper, 0, '2026-08-20');
-
-		expect(vault.contentOf('note.md')).toContain('- [ ] Задача 📅 2026-08-20');
-		expect(vault.contentOf('note.md')).not.toContain(TODAY);
-	});
-
-	it('перенос с расчётного дня: экземпляр на новую дату, уехавший день пропадает, череда на месте', async () => {
-		const { wrapper, vault } = await mountCalendar({
-			files: {
-				'note.md': taskFileText({
-					date: '2026-08-29',
-					repeat: 'Каждую неделю в Субботу, Воскресенье',
-				}),
-			},
-		});
-
-		// 30 августа - воскресенье, расчётный день череды: своего блока у него нет.
-		await clickDay(wrapper, '2026-08-30');
-		expect(wrapper.find('.tasks__item-date').exists()).toBe(true);
-
-		await pickDate(wrapper, 0, '2026-09-03');
-
-		// Воскресенье осталось в 📅 экземпляра, четверг 3-е встал в ↔️.
-		expect(vault.contentOf('note.md')).toBe([
-			'',
-			'- [ ] Задача 📅 2026-08-29 🔁 Каждую неделю в Субботу, Воскресенье',
-			'- [ ] Задача 📅 2026-08-30 ↔️ 2026-09-03',
-			'',
-		].join('\n'));
-
-		// Суббота 29-го на месте, уехавшего воскресенья нет, дальше череда как была.
-		expect(hasDot(wrapper, '2026-08-29')).toBe(true);
-		expect(hasDot(wrapper, '2026-08-30')).toBe(false);
-		expect(hasDot(wrapper, '2026-09-03')).toBe(true);
-		expect(hasDot(wrapper, '2026-09-05')).toBe(true);
-		expect(hasDot(wrapper, '2026-09-06')).toBe(true);
-	});
-
-	it('карточка перенесённого экземпляра стоит на дне показа', async () => {
-		const { wrapper } = await mountCalendar({
-			files: {
-				'note.md': taskFileText({
-					date: '2026-08-29',
-					move: '2026-09-03',
-					body: ['- [ ] Полить фикус'],
-				}),
-			},
-		});
-
-		await clickDay(wrapper, '2026-08-29');
-		expect(itemTexts(wrapper)).toEqual([]);
-
-		await clickDay(wrapper, '2026-09-03');
-		expect(itemTexts(wrapper)).toEqual(['Полить фикус']);
-	});
-
-	it('пустое значение поля ничего не пишет', async () => {
-		const { wrapper, vault } = await mountCalendar({
-			files: { 'note.md': taskFileText({ date: TODAY }) },
-		});
-
-		const input = wrapper.find('.tasks__item-date-input');
-		(input.element as HTMLInputElement).value = '';
-		await input.trigger('change');
-		await flushPromises();
-
-		expect(vault.calls.process).toBe(0);
-	});
-});
-
-describe('отметка подзадач', () => {
-	it('клик по чекбоксу отмечает строку в файле', async () => {
-		const { wrapper, vault } = await mountCalendar({
-			files: { 'note.md': taskFileText({ date: TODAY, body: ['- [ ] Раз', '\t- [ ] Два'] }) },
-		});
-
-		await wrapper.findAll('input.task-list-item-checkbox')[1].trigger('click');
-		await flushPromises();
-
-		expect(vault.contentOf('note.md')).toContain('- [ ] Раз');
-		expect(vault.contentOf('note.md')).toContain('- [x] Два');
-	});
-
-	it('последняя галочка закрывает задачу и переносит карточку в конец списка', async () => {
-		const { wrapper, vault } = await mountCalendar({
-			files: { 'note.md': taskFileText({ date: TODAY, body: ['- [ ] Дело'] }) },
-		});
-
-		await wrapper.find('input.task-list-item-checkbox').trigger('click');
-		await flushPromises();
-
-		expect(vault.contentOf('note.md')).toContain(`- [x] Дело 📅 ${TODAY} ✅ ${TODAY}`);
-		expect(itemKinds(wrapper)).toEqual(['выполненная']);
-	});
-
-	it('снятая галочка возвращает задачу в работу', async () => {
-		const { wrapper, vault } = await mountCalendar({
-			files: {
-				'note.md': taskFileText({ date: TODAY, done: TODAY, body: ['- [x] Дело'] }),
-			},
-		});
-
-		await wrapper.find('input.task-list-item-checkbox').trigger('click');
-		await flushPromises();
-
-		expect(vault.contentOf('note.md')).not.toContain('✅');
-		expect(itemKinds(wrapper)).toEqual(['дня']);
-	});
-
-	it('закрытие повтора показывает следующий день, а сегодняшний уходит в хвост', async () => {
-		const { wrapper } = await mountCalendar({
-			files: {
-				'note.md': taskFileText({
-					date: TODAY,
-					repeat: 'Каждый день',
-					body: ['- [ ] Дело'],
-				}),
-			},
-		});
-
-		await wrapper.find('input.task-list-item-checkbox').trigger('click');
-		await flushPromises();
-
-		expect(itemKinds(wrapper)).toEqual(['выполненная']);
-		expect(hasDot(wrapper, '2026-08-14')).toBe(true);
-
-		await clickDay(wrapper, '2026-08-14');
-
-		expect(itemKinds(wrapper)).toEqual(['дня']);
-		expect(wrapper.find('.tasks__item input.task-list-item-checkbox').element)
-			.toHaveProperty('checked', false);
-	});
-
-	it('после отметки расчётного дня на нём остаётся одна карточка', async () => {
-		const { wrapper } = await mountCalendar({
-			files: {
-				'note.md': taskFileText({
-					date: TODAY,
-					repeat: 'Каждый день',
-					body: ['- [ ] Дело'],
-				}),
-			},
-		});
-
-		await clickDay(wrapper, '2026-08-16');
-		expect(itemKinds(wrapper)).toEqual(['дня']);
-
-		await wrapper.find('input.task-list-item-checkbox').trigger('click');
-		await flushPromises();
-
-		// Новый повтор ушёл на 17-е, на 16-м осталась только выполненная карточка.
-		expect(itemKinds(wrapper)).toEqual(['выполненная']);
-		expect(hasDot(wrapper, '2026-08-16')).toBe(false);
-		expect(hasDot(wrapper, '2026-08-17')).toBe(true);
-
-		await clickDay(wrapper, '2026-08-17');
-
-		expect(itemKinds(wrapper)).toEqual(['дня']);
-	});
-});
-
-describe('создание задачи', () => {
-	const type = async (wrapper: VueWrapper, text: string) => {
-		await wrapper.find('.task__calendar-create-input').setValue(text);
-	};
-
-	/** Enter в поле: textarea шлёт beforeinput с переносом строки. */
-	const pressEnter = async (wrapper: VueWrapper, init: InputEventInit = {}) => {
-		const event = new InputEvent('beforeinput', {
-			inputType: 'insertLineBreak',
-			cancelable: true,
-			...init,
-		});
-
-		wrapper.find('.task__calendar-create-input').element.dispatchEvent(event);
-		await flushPromises();
-
-		return event;
-	};
-
-	const inputOf = (wrapper: VueWrapper) =>
-		wrapper.find('.task__calendar-create-input').element as HTMLTextAreaElement;
-
-	it('кнопка одна и выключена, пока поле пустое', async () => {
-		const { wrapper } = await mountCalendar();
-		const buttons = wrapper.findAll('.task__calendar-create-button');
-
-		expect(buttons).toHaveLength(1);
-		expect(buttons[0].attributes('disabled')).toBeDefined();
-
-		await type(wrapper, 'Дело');
-
-		expect(buttons[0].attributes('disabled')).toBeUndefined();
-	});
-
-	it('плейсхолдер подставляет выбранную дату', async () => {
-		const { wrapper } = await mountCalendar();
-
-		await clickDay(wrapper, '2026-08-20');
-
-		expect(wrapper.find('.task__calendar-create-input').attributes('placeholder'))
-			.toBe('Новая задача на 2026-08-20');
-	});
-
-	it('Enter создаёт задачу в файле года и не открывает файл', async () => {
-		const { wrapper, vault, app } = await mountCalendar({ tasksFolderPath: '/' });
-
-		await type(wrapper, 'Купить молоко');
-		const event = await pressEnter(wrapper);
-
-		// Перенос строки в поле не вставляется: строка задачи одна.
-		expect(event.defaultPrevented).toBe(true);
-		expect(vault.contentOf('2026.md')).toBe(`\n- [ ] Купить молоко 📅 ${TODAY}\n`);
-		expect(app.workspace.openLinkCalls).toHaveLength(0);
-		expect(inputOf(wrapper).value).toBe('');
-	});
-
-	it('кнопка создаёт задачу так же, как Enter', async () => {
-		const { wrapper, vault } = await mountCalendar({ tasksFolderPath: '/' });
-
-		await type(wrapper, 'Купить молоко');
-		await wrapper.find('.task__calendar-create').trigger('submit');
-		await flushPromises();
-
-		expect(vault.contentOf('2026.md')).toBe(`\n- [ ] Купить молоко 📅 ${TODAY}\n`);
-		expect(inputOf(wrapper).value).toBe('');
-	});
-
-	it('Enter, которым IME подтверждает слово, задачу не создаёт', async () => {
-		const { wrapper, vault } = await mountCalendar({ tasksFolderPath: '/' });
-
-		await type(wrapper, 'にほん');
-		const event = await pressEnter(wrapper, { isComposing: true });
-
-		expect(event.defaultPrevented).toBe(false);
-		expect(vault.paths()).toEqual([]);
-	});
-
-	it('Enter в пустом поле ничего не пишет и строку не переносит', async () => {
-		const { wrapper, vault } = await mountCalendar({ tasksFolderPath: '/' });
-
-		const event = await pressEnter(wrapper);
-
-		expect(event.defaultPrevented).toBe(true);
-		expect(vault.paths()).toEqual([]);
-	});
-
-	it('поле растёт под текст и после создания возвращается в одну строку', async () => {
-		const { wrapper } = await mountCalendar({ tasksFolderPath: '/' });
-		// Вёрстки в jsdom нет: высоту текста подставляем сами.
-		Object.defineProperty(inputOf(wrapper), 'scrollHeight', { configurable: true, value: 64 });
-
-		await type(wrapper, 'Очень длинная задача, которая не влезает в одну строку поля');
-
-		expect(inputOf(wrapper).style.height).toBe('64px');
-
-		await pressEnter(wrapper);
-
-		expect(inputOf(wrapper).style.height).toBe('');
-	});
-
-	it('вставленный текст в несколько строк ложится в файл одной строкой', async () => {
-		const { wrapper, vault } = await mountCalendar({ tasksFolderPath: '/' });
-
-		await type(wrapper, 'Купить\nмолоко  \n\n и хлеб');
-		await wrapper.find('.task__calendar-create').trigger('submit');
-		await flushPromises();
-
-		expect(vault.contentOf('2026.md')).toBe(`\n- [ ] Купить молоко и хлеб 📅 ${TODAY}\n`);
-	});
-
-	it('новая задача встаёт в списке дня сверху', async () => {
-		const { wrapper } = await mountCalendar({ tasksFolderPath: '/' });
-
-		for (const text of ['Первая', 'Вторая', 'Третья']) {
-			await type(wrapper, text);
-			await wrapper.find('.task__calendar-create').trigger('submit');
-			await flushPromises();
-		}
-
-		expect(itemTexts(wrapper)).toEqual(['Третья', 'Вторая', 'Первая']);
-	});
-
-	it('созданная задача сразу видна в списке дня', async () => {
-		const { wrapper } = await mountCalendar({ tasksFolderPath: '/' });
-
-		await clickDay(wrapper, '2026-08-20');
-		await type(wrapper, 'Дело');
-		await wrapper.find('.task__calendar-create').trigger('submit');
-		await flushPromises();
-
-		expect(itemTexts(wrapper)).toEqual(['Дело']);
-		expect(hasDot(wrapper, '2026-08-20')).toBe(true);
-	});
-});
-
-describe('реакция на изменения хранилища', () => {
-	it('новая задача появляется без перезапуска', async () => {
-		const { wrapper, vault } = await mountCalendar({ tasksFolderPath: '/' });
-
-		await vault.create('новая.md', taskFileText({ date: TODAY, body: ['- [ ] Новая'] }));
-		await settle();
-
-		expect(itemTexts(wrapper)).toEqual(['Новая']);
-	});
-
-	it('правка заметки в редакторе видна в карточке', async () => {
-		const { wrapper, vault } = await mountCalendar({
-			files: { 'note.md': taskFileText({ date: TODAY, body: ['- [ ] Было'] }) },
-		});
-
-		await vault.modify(
-			new TFile('note.md'),
-			taskFileText({ date: TODAY, body: ['- [ ] Стало'] })
-		);
-		await settle();
-
-		expect(itemTexts(wrapper)).toEqual(['Стало']);
-	});
-
-	it('дописанная в заметке подзадача возвращает выполненную задачу в работу', async () => {
-		const { wrapper, vault } = await mountCalendar({
-			files: {
-				'note.md': taskFileText({ date: TODAY, done: TODAY, body: ['- [x] Дело'] }),
-			},
-		});
-
-		expect(itemKinds(wrapper)).toEqual(['выполненная']);
-
-		await vault.modify(
-			new TFile('note.md'),
-			taskFileText({ date: TODAY, done: TODAY, body: ['- [x] Дело', '\t- [ ] Ещё'] })
-		);
-		await settle();
-
-		expect(itemKinds(wrapper)).toEqual(['дня']);
-		expect(hasDot(wrapper, TODAY)).toBe(true);
-	});
-
-	it('удалённая задача уходит из списка', async () => {
-		const { wrapper, vault } = await mountCalendar({
-			files: { 'note.md': taskFileText({ date: TODAY }) },
-		});
-
-		await vault.delete(new TFile('note.md'));
-		await settle();
-
-		expect(wrapper.findAll('.tasks__item')).toHaveLength(0);
 	});
 
 	it('при размонтировании отписывается от карты', async () => {
@@ -1027,14 +253,5 @@ describe('реакция на изменения хранилища', () => {
 		wrapper.unmount();
 
 		expect(unsubscribe).toHaveBeenCalledTimes(1);
-	});
-
-	it('карту поднимает сам календарь, если плагин ещё не успел', async () => {
-		const { wrapper } = await mountCalendar({
-			files: { 'note.md': taskFileText({ date: TODAY, body: ['- [ ] Дело'] }) },
-		});
-
-		expect(wrapper.find('.task__calendar-tasks-loading').exists()).toBe(false);
-		expect(itemTexts(wrapper)).toEqual(['Дело']);
 	});
 });

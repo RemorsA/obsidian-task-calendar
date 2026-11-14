@@ -1,1230 +1,568 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Notice, TFile } from './mocks/obsidian';
-import { createPluginDouble, PluginDouble, taskFileText, TODAY, useFixedClock } from './helpers';
 import { TaskMap } from '../src/taskMap';
-import { showDate } from '../src/taskFormat';
+import { App, Notice, parseFrontmatter, TFile, Vault } from './mocks/obsidian';
+import {
+	createPluginDouble,
+	PluginDoubleOptions,
+	taskFileText,
+	TaskFixture,
+	taskProps,
+	TODAY,
+	useFixedClock,
+} from './helpers';
 
-/**
- * Тесты карты задач: индексация, автоматика чекбокса, запись в файл.
- *
- * Автоматика срабатывает только на **переключение**: состояние чекбоксов блока
- * сравнивается с тем, что запомнила прошлая индексация. Поэтому почти каждый тест
- * сначала поднимает карту (`start`), а уже потом что-то отмечает.
- */
+/** Имя файла, который плагин создаст сейчас: часы стоят на 13.08.2026 12:00:00. */
+const NOW_NAME = '20260813_120000';
 
-/** Дождаться debounce событий хранилища. */
-const settle = async (): Promise<void> => {
+let map: TaskMap;
+let vault: Vault;
+let app: App;
+
+const setup = async (options: PluginDoubleOptions = {}) => {
+	const double = createPluginDouble(options);
+	map = double.taskMap;
+	vault = double.vault;
+	app = double.app;
+	await map.start();
+};
+
+/** Дать сработать debounce событий хранилища. */
+const settle = async () => {
 	await vi.advanceTimersByTimeAsync(300);
 };
 
-describe('карта задач', () => {
-	let double: PluginDouble;
-	let map: TaskMap;
-
-	const setup = async (options: Parameters<typeof createPluginDouble>[0]): Promise<void> => {
-		double = createPluginDouble(options);
-		map = double.taskMap;
-		await map.start();
-	};
-
-	const fileOf = (path: string): TFile => new TFile(path);
-
-	beforeEach(() => {
-		useFixedClock();
-	});
-
-	afterEach(() => {
-		map?.stop();
-		vi.useRealTimers();
-	});
-
-	describe('индексация', () => {
-		it('собирает задачи со всего хранилища, папка из настроек скан не ограничивает', async () => {
-			await setup({
-				tasksFolderPath: '/Задачи',
-				files: {
-					'корень.md': taskFileText({ date: '2026-08-12' }),
-					'Задачи/раз.md': taskFileText({ date: '2026-08-13' }),
-					'Задачи/вложенная/два.md': taskFileText({ date: '2026-08-14' }),
-					'Другое/три.md': taskFileText({ date: '2026-08-15' }),
-				},
-			});
-
-			expect(map.all().map((task) => task.key).sort()).toEqual([
-				'/Другое/три.md#0',
-				'/Задачи/вложенная/два.md#0',
-				'/Задачи/раз.md#0',
-				'/корень.md#0',
-			]);
-		});
-
-		it('не заметки Markdown не читаются', async () => {
-			await setup({
-				files: { 'note.md': taskFileText(), 'note.txt': taskFileText() },
-			});
-
-			expect(map.all().map((task) => task.key)).toEqual(['/note.md#0']);
-			expect(double.vault.calls.cachedRead).toBe(1);
-		});
-
-		it('в файле несколько блоков - несколько задач', async () => {
-			await setup({
-				files: {
-					'note.md': taskFileText(
-						{ date: '2026-08-13', repeat: 'Каждый день' },
-						{ date: '2026-08-12', done: '2026-08-12', body: ['- [x] Задача'] },
-					),
-				},
-			});
-
-			expect(map.all().map((task) => task.blockIndex)).toEqual([0, 1]);
-		});
-
-		it('на старте хранилище не сканируется на запись', async () => {
-			await setup({
-				files: {
-					// Все чекбоксы отмечены, ✅ нет - плагин не вмешивается.
-					'note.md': taskFileText({ body: ['- [x] Задача'] }),
-				},
-			});
-
-			expect(double.vault.calls.process).toBe(0);
-			expect(double.vault.calls.modify).toBe(0);
-			expect(map.all()[0].done).toBeNull();
-		});
-	});
-
-	describe('автоматика чекбокса', () => {
-		it('не все отмечены -> все отмечены: ставит ✅ сегодня', async () => {
-			await setup({
-				files: { 'note.md': taskFileText({ date: '2026-08-13', body: ['- [ ] Раз', '\t- [ ] Два'] }) },
-			});
-
-			await map.toggleCheckbox('/note.md#0', 0);
-			expect(double.vault.contentOf('note.md')).not.toContain('✅');
-
-			await map.toggleCheckbox('/note.md#0', 1);
-
-			expect(double.vault.contentOf('note.md')).toBe([
-				'',
-				`- [x] Раз 📅 2026-08-13 ✅ ${TODAY}`,
-				'\t- [x] Два',
-				'',
-			].join('\n'));
-			expect(map.all()[0].done).toBe(TODAY);
-		});
-
-		it('отмечена строка задачи, подзадача нет - задача не выполнена', async () => {
-			await setup({
-				files: { 'note.md': taskFileText({ date: '2026-08-13', body: ['- [ ] Раз', '\t- [ ] Два'] }) },
-			});
-
-			await map.toggleCheckbox('/note.md#0', 0);
-
-			expect(double.vault.contentOf('note.md')).not.toContain('✅');
-			expect(map.all()[0].done).toBeNull();
-		});
-
-		it('все отмечены -> не все: убирает ✅', async () => {
-			await setup({
-				files: {
-					'note.md': taskFileText({
-						date: '2026-08-13',
-						done: '2026-08-13',
-						body: ['- [x] Раз', '\t- [x] Два'],
-					}),
-				},
-			});
-
-			await map.toggleCheckbox('/note.md#0', 1);
-
-			expect(double.vault.contentOf('note.md')).not.toContain('✅');
-			expect(map.all()[0].done).toBeNull();
-		});
-
-		it('повтор: новый блок встаёт над закрытым, 🔁 уходит из него', async () => {
-			await setup({
-				files: {
-					'note.md': taskFileText({
-						date: '2026-08-13',
-						repeat: 'Каждый день',
-						body: ['- [ ] Купить молоко'],
-					}),
-				},
-			});
-
-			await map.toggleCheckbox('/note.md#0', 0);
-
-			expect(double.vault.contentOf('note.md')).toBe([
-				'',
-				'- [ ] Купить молоко 📅 2026-08-14 🔁 Каждый день',
-				`- [x] Купить молоко 📅 2026-08-13 ✅ ${TODAY}`,
-				'',
-			].join('\n'));
-		});
-
-		it('следующий повтор считается от 📅 закрытого блока', async () => {
-			await setup({
-				files: {
-					'note.md': taskFileText({
-						date: '2026-08-29',
-						repeat: 'Каждую неделю в Субботу',
-					}),
-				},
-			});
-
-			await map.toggleCheckbox('/note.md#0', 0);
-
-			expect(double.vault.contentOf('note.md')).toContain('📅 2026-09-05');
-		});
-
-		it('задача без 🔁 просто закрывается, новый блок не появляется', async () => {
-			await setup({ files: { 'note.md': taskFileText({ date: '2026-08-13' }) } });
-
-			await map.toggleCheckbox('/note.md#0', 0);
-
-			expect(map.all()).toHaveLength(1);
-			expect(map.all()[0].done).toBe(TODAY);
-		});
-
-		it('в закрытом блоке галка снимается и ставится обратно, генерации нет', async () => {
-			await setup({
-				files: {
-					'note.md': taskFileText({
-						date: '2026-08-13',
-						done: '2026-08-13',
-						body: ['- [x] Дело'],
-					}),
-				},
-			});
-
-			await map.toggleCheckbox('/note.md#0', 0);
-			expect(double.vault.contentOf('note.md')).not.toContain('✅');
-
-			await map.toggleCheckbox('/note.md#0', 0);
-
-			expect(double.vault.contentOf('note.md')).toContain(`✅ ${TODAY}`);
-			expect(map.all()).toHaveLength(1);
-		});
-
-		it('галка руками в файле запускает ту же автоматику', async () => {
-			await setup({
-				files: {
-					'note.md': taskFileText({ date: '2026-08-13', repeat: 'Каждый день' }),
-				},
-			});
-
-			await double.vault.modify(
-				fileOf('note.md'),
-				taskFileText({ date: '2026-08-13', repeat: 'Каждый день', body: ['- [x] Задача'] })
-			);
-			await settle();
-
-			const content = double.vault.contentOf('note.md') ?? '';
-
-			expect(content).toContain('📅 2026-08-14');
-			expect(content).toContain(`✅ ${TODAY}`);
-		});
-
-		it('своя же запись нового круга автоматики не запускает', async () => {
-			await setup({
-				files: {
-					'note.md': taskFileText({ date: '2026-08-13', repeat: 'Каждый день' }),
-				},
-			});
-
-			await map.toggleCheckbox('/note.md#0', 0);
-
-			const after = double.vault.calls.process;
-			const content = double.vault.contentOf('note.md');
-
-			await settle();
-			await settle();
-
-			expect(double.vault.calls.process).toBe(after);
-			expect(double.vault.contentOf('note.md')).toBe(content);
-		});
-
-		it('правка текста без смены итога файл не правит', async () => {
-			await setup({
-				files: { 'note.md': taskFileText({ date: '2026-08-13', body: ['- [ ] Дело'] }) },
-			});
-
-			await double.vault.modify(
-				fileOf('note.md'),
-				taskFileText({ date: '2026-08-13', body: ['- [ ] Другое дело'] })
-			);
-			await settle();
-
-			expect(double.vault.calls.process).toBe(0);
-			expect(map.all()[0].body).toBe('- [ ] Другое дело');
-		});
-
-		it('дописанная в файле подзадача снимает ✅', async () => {
-			await setup({
-				files: {
-					'note.md': taskFileText({
-						date: '2026-08-13',
-						done: '2026-08-13',
-						body: ['- [x] Дело'],
-					}),
-				},
-			});
-
-			// Блок перестал быть отмеченным целиком - значит, снова невыполненный.
-			await double.vault.modify(
-				fileOf('note.md'),
-				taskFileText({
-					date: '2026-08-13',
-					done: '2026-08-13',
-					body: ['- [x] Дело', '\t- [ ] Ещё'],
-				})
-			);
-			await settle();
-
-			expect(double.vault.contentOf('note.md')).not.toContain('✅');
-			expect(map.all()[0].done).toBeNull();
-		});
-
-		it('дописанная отмеченная подзадача ✅ не трогает', async () => {
-			await setup({
-				files: {
-					'note.md': taskFileText({
-						date: '2026-08-13',
-						done: '2026-08-13',
-						body: ['- [x] Дело'],
-					}),
-				},
-			});
-
-			await double.vault.modify(
-				fileOf('note.md'),
-				taskFileText({
-					date: '2026-08-13',
-					done: '2026-08-13',
-					body: ['- [x] Дело', '\t- [x] Ещё'],
-				})
-			);
-			await settle();
-
-			expect(double.vault.calls.process).toBe(0);
-			expect(map.all()[0].done).toBe('2026-08-13');
-		});
-
-		it('дописанная подзадача в незакрытом блоке ничего не пишет', async () => {
-			await setup({
-				files: { 'note.md': taskFileText({ date: '2026-08-13', body: ['- [ ] Дело'] }) },
-			});
-
-			await double.vault.modify(
-				fileOf('note.md'),
-				taskFileText({ date: '2026-08-13', body: ['- [ ] Дело', '\t- [ ] Ещё'] })
-			);
-			await settle();
-
-			expect(double.vault.calls.process).toBe(0);
-		});
-
-		it('все чекбоксы удалены - блок невалиден, ✅ остаётся как написано', async () => {
-			await setup({
-				files: {
-					'note.md': taskFileText({
-						date: '2026-08-13',
-						done: '2026-08-13',
-						body: ['- [x] Дело'],
-					}),
-				},
-			});
-
-			await double.vault.modify(
-				fileOf('note.md'),
-				taskFileText({ date: '2026-08-13', done: '2026-08-13', body: ['- Просто пункт'] })
-			);
-			await settle();
-
-			expect(double.vault.calls.process).toBe(0);
-			expect(double.vault.contentOf('note.md')).toContain('✅');
-			expect(map.all()).toHaveLength(0);
-		});
-
-		it('блок, съехавший на чужой номер, автоматику не запускает', async () => {
-			await setup({
-				files: {
-					'note.md': taskFileText({ date: '2026-08-13', body: ['- [ ] Дело'] }),
-				},
-			});
-
-			// Сверху руками появился отмеченный блок: под номером 0 теперь другая
-			// задача, и её галочек мы раньше не видели.
-			await double.vault.modify(
-				fileOf('note.md'),
-				taskFileText(
-					{ date: '2026-08-20', body: ['- [x] Новая'] },
-					{ date: '2026-08-13', body: ['- [ ] Дело'] },
-				)
-			);
-			await settle();
-
-			expect(double.vault.calls.process).toBe(0);
-			expect(double.vault.contentOf('note.md')).not.toContain('✅');
-		});
-
-		it('ручная правка параметров не вызывает ни перезаписи, ни переименования', async () => {
-			await setup({
-				files: { 'note.md': taskFileText({ date: '2026-08-13' }) },
-			});
-
-			await double.vault.modify(
-				fileOf('note.md'),
-				taskFileText({ date: '2026-08-20', repeat: 'Каждый день', done: '2026-08-20' })
-			);
-			await settle();
-
-			expect(double.vault.calls.process).toBe(0);
-			expect(double.vault.paths()).toEqual(['note.md']);
-			expect(map.all()[0]).toMatchObject({
-				date: '2026-08-20',
-				repeat: 'Каждый день',
-				done: '2026-08-20',
-			});
-		});
-
-		it('✅ руками при снятых чекбоксах сохраняется', async () => {
-			await setup({ files: { 'note.md': taskFileText({ date: '2026-08-13' }) } });
-
-			await double.vault.modify(
-				fileOf('note.md'),
-				taskFileText({ date: '2026-08-13', done: '2026-08-13', body: ['- [ ] Задача'] })
-			);
-			await settle();
-
-			expect(double.vault.contentOf('note.md')).toContain('✅');
-			expect(map.all()[0]).toMatchObject({ done: '2026-08-13', checked: false });
-		});
-	});
-
-	describe('отметка расчётного дня череды', () => {
-		const weekend = () => ({
+/** Правка файла руками - в редакторе или в панели свойств. */
+const editFile = async (path: string, fixture: TaskFixture) => {
+	await vault.modify(new TFile(path), taskFileText(fixture));
+	await settle();
+};
+
+const propsOf = (path: string) => parseFrontmatter(vault.contentOf(path) ?? '');
+
+beforeEach(() => {
+	useFixedClock();
+});
+
+afterEach(() => {
+	map?.stop();
+	vi.useRealTimers();
+	vi.restoreAllMocks();
+});
+
+describe('индексация', () => {
+	it('находит задачи по всему хранилищу, где бы они ни лежали и как бы ни назывались', async () => {
+		await setup({
 			files: {
-				'note.md': taskFileText({
-					date: '2026-08-22',
-					repeat: 'Каждую неделю в Субботу, Воскресенье',
-					body: ['- [ ] Дело'],
-				}),
+				'Задачи/20260810_090000.md': taskFileText({ text: 'Раз' }),
+				'Проекты/Дом/ремонт.md': taskFileText({ text: 'Два' }),
+				'20260801_100000.md': taskFileText({ text: 'Три' }),
+			},
+			tasksFolderPath: '/Задачи',
+		});
+
+		expect(map.all().map((task) => task.text).sort()).toEqual(['Два', 'Раз', 'Три']);
+		expect(map.byPath('Проекты/Дом/ремонт.md')).toMatchObject({
+			folder: 'Проекты/Дом',
+			fileName: 'ремонт',
+		});
+	});
+
+	it('заметка без «Задача» и файл без свойств задачами не считаются', async () => {
+		await setup({
+			files: {
+				'Заметка.md': '# Просто заметка\n',
+				'Свойства.md': '---\ntags: дом\n---\nТекст\n',
+				'Картинка.png': '',
 			},
 		});
 
-		/** Блок, который сейчас ведёт цепочку. */
-		const chain = () => map.all().find((task) => task.repeat !== null);
+		expect(map.all()).toEqual([]);
+	});
 
-		/** 📅 строк задач файла сверху вниз - порядок блоков в файле. */
-		const datesInFile = (path: string): string[] => (double.vault.contentOf(path) ?? '')
-			.split('\n')
-			.map((line) => line.match(/^- .*📅 (\S+)/u)?.[1])
-			.filter((date): date is string => date !== undefined);
+	it('старый инлайн-формат больше не читается', async () => {
+		await setup({ files: { '2026.md': '\n- [ ] Купить молоко 📅 2026-08-13 🔁 Каждый день\n' } });
 
-		it('заводит блок этого дня и закрывает только его', async () => {
-			await setup(weekend());
+		expect(map.all()).toEqual([]);
+	});
 
-			await map.toggleCheckbox('/note.md#0', 0, '2026-08-29');
+	it('при старте ничего не пишет, даже если всё отмечено, а даты выполнения нет', async () => {
+		await setup({ files: { 'a.md': taskFileText({ checked: true }) } });
 
-			expect(double.vault.contentOf('note.md')).toBe([
-				'',
-				'- [ ] Дело 📅 2026-08-22 🔁 Каждую неделю в Субботу, Воскресенье',
-				`- [x] Дело 📅 2026-08-29 ✅ ${TODAY}`,
-				'',
-			].join('\n'));
+		// Отметили при выключенном плагине - перехода не было, автоматика молчит.
+		expect(app.fileManager.calls).toHaveLength(0);
+		expect(vault.calls.modify).toBe(0);
+	});
+
+	it('битый YAML и нечитаемый файл индексацию не роняют', async () => {
+		const double = createPluginDouble({
+			files: {
+				'битый.md': '---\nсломанный yaml\n---\n',
+				'нечитаемый.md': taskFileText({ text: 'Не прочитать' }),
+				'живой.md': taskFileText({ text: 'Живой' }),
+			},
+		});
+		double.vault.failures.read = new Set(['нечитаемый.md']);
+		// Читать при старте приходится только то, чего нет в кэше метаданных.
+		double.app.metadataCache.uncached.add('нечитаемый.md');
+		vi.spyOn(console, 'error').mockImplementation(() => undefined);
+		map = double.taskMap;
+
+		await map.start();
+
+		expect(map.all().map((task) => task.text)).toEqual(['Живой']);
+	});
+
+	it('старт не читает файлы: свойства берутся из кэша метаданных Obsidian', async () => {
+		await setup({
+			files: {
+				'Задачи/а.md': taskFileText({ text: 'Первая' }),
+				'Задачи/б.md': taskFileText({ text: 'Вторая', subtasks: [['под', true]] }),
+				'Заметка.md': '# Просто заметка\n',
+			},
 		});
 
-		it('текущий блок остаётся на своём дне и с повтором', async () => {
-			await setup(weekend());
+		expect(vault.calls.cachedRead).toBe(0);
+		expect(vault.calls.read).toBe(0);
+		expect(map.all().map((task) => task.text).sort()).toEqual(['Вторая', 'Первая']);
+		expect(map.byPath('Задачи/б.md')?.subtasks).toEqual([{ number: 1, text: 'под', checked: true }]);
+	});
 
-			await map.toggleCheckbox('/note.md#0', 0, '2026-08-29');
+	it('файл, которого ещё нет в кэше метаданных, читается с диска', async () => {
+		const double = createPluginDouble({
+			files: {
+				'а.md': taskFileText({ text: 'Из кэша' }),
+				'б.md': taskFileText({ text: 'С диска' }),
+			},
+		});
+		double.app.metadataCache.uncached.add('б.md');
+		map = double.taskMap;
 
-			expect(chain()).toMatchObject({
-				date: '2026-08-22',
-				done: null,
-				repeat: 'Каждую неделю в Субботу, Воскресенье',
-			});
+		await map.start();
+
+		expect(double.vault.calls.cachedRead).toBe(1);
+		expect(map.all().map((task) => task.text).sort()).toEqual(['Из кэша', 'С диска']);
+	});
+
+	it('задача из кэша - и автоматика на первую же правку после старта', async () => {
+		const PATH = 'Задачи/20260810_090000.md';
+		await setup({ files: { [PATH]: taskFileText() } });
+
+		await editFile(PATH, { checked: true });
+
+		expect(propsOf(PATH)?.['Дата выполнения']).toBe(TODAY);
+	});
+
+	it('кэш догнал файл (changed) - задача перечитывается, обычные заметки не читаются', async () => {
+		const double = createPluginDouble({
+			files: {
+				'задача.md': taskFileText({ text: 'Новый текст' }),
+				'заметка.md': '# Заметка\n',
+			},
+		});
+		// При старте кэш ещё прежний: правка пришла синхронизацией, пока Obsidian был закрыт.
+		double.app.metadataCache.stale.set('задача.md', taskProps({ text: 'Старый текст' }));
+		map = double.taskMap;
+		await map.start();
+		expect(map.byPath('задача.md')?.text).toBe('Старый текст');
+
+		double.app.metadataCache.stale.delete('задача.md');
+		double.app.metadataCache.trigger('changed', new TFile('задача.md'));
+		double.app.metadataCache.trigger('changed', new TFile('заметка.md'));
+		await settle();
+
+		expect(map.byPath('задача.md')?.text).toBe('Новый текст');
+		expect(double.vault.calls.cachedRead).toBe(1);
+	});
+
+	it('удалили папку - забываются и задачи из кэша, у которых нет хэша', async () => {
+		await setup({ files: { 'Папка/а.md': taskFileText({ text: 'В папке' }), 'б.md': taskFileText({ text: 'Снаружи' }) } });
+
+		await vault.deleteFolder('Папка');
+		await settle();
+
+		expect(map.all().map((task) => task.text)).toEqual(['Снаружи']);
+	});
+});
+
+describe('автоматика при правке свойств', () => {
+	const PATH = 'Задачи/20260810_090000.md';
+
+	it('отметили задачу в свойствах - ставится дата выполнения', async () => {
+		await setup({ files: { [PATH]: taskFileText() } });
+
+		await editFile(PATH, { checked: true });
+
+		expect(propsOf(PATH)).toMatchObject({ Выполнено: true, 'Дата выполнения': TODAY });
+		expect(map.byPath(PATH)?.doneDate).toBe(TODAY);
+	});
+
+	it('отмечена задача, но не подзадача - даты выполнения нет', async () => {
+		await setup({ files: { [PATH]: taskFileText({ subtasks: [['Раз', false]] }) } });
+
+		await editFile(PATH, { checked: true, subtasks: [['Раз', false]] });
+
+		expect(propsOf(PATH)?.['Дата выполнения']).toBeNull();
+		expect(app.fileManager.calls).toHaveLength(0);
+	});
+
+	it('сняли галочку - дата выполнения очищается', async () => {
+		await setup({ files: { [PATH]: taskFileText({ checked: true, doneDate: TODAY }) } });
+
+		await editFile(PATH, { checked: false, doneDate: TODAY });
+
+		expect(propsOf(PATH)?.['Дата выполнения']).toBeNull();
+		expect(map.byPath(PATH)?.doneDate).toBeNull();
+	});
+
+	it('выполнили повтор - повтор очищается, рядом появляется файл следующего', async () => {
+		await setup({
+			files: {
+				[PATH]: taskFileText({
+					text: 'Полить фикус',
+					date: '2026-08-15',
+					repeat: 'Каждую неделю Суббота, Воскресенье',
+					subtasks: [['Налить воды', false]],
+				}),
+			},
+			tasksFolderPath: '/Другая папка',
 		});
 
-		it('у блока дня нет 🔁 - свою череду он не ведёт', async () => {
-			await setup(weekend());
-
-			await map.toggleCheckbox('/note.md#0', 0, '2026-08-29');
-
-			expect(map.all().find((task) => task.date === '2026-08-29')).toMatchObject({
-				repeat: null,
-				done: TODAY,
-			});
+		await editFile(PATH, {
+			text: 'Полить фикус',
+			checked: true,
+			date: '2026-08-15T07:30:00',
+			repeat: 'Каждую неделю Суббота, Воскресенье',
+			subtasks: [['Налить воды', true]],
 		});
 
-		it('тело блока дня - чистая копия, а не чужие отметки', async () => {
-			await setup({
-				files: {
-					'note.md': taskFileText({
-						date: '2026-08-22',
-						repeat: 'Каждый день',
-						body: ['- [x] Раз', '\t- [ ] Два'],
-					}),
-				},
-			});
-
-			await map.toggleCheckbox('/note.md#0', 1, '2026-08-29');
-
-			const day = map.all().find((task) => task.date === '2026-08-29');
-
-			// Отмечена только та подзадача, по которой кликнули.
-			expect(day?.body).toBe('- [ ] Раз\n\t- [x] Два');
-			expect(day?.done).toBeNull();
-		});
-
-		it('новый выполненный уходит в конец, остальные блоки не двигаются', async () => {
-			await setup(weekend());
-
-			await map.toggleCheckbox('/note.md#0', 0, '2026-08-29');
-			await map.toggleCheckbox(chain()!.key, 0);
-			await map.toggleCheckbox(chain()!.key, 0);
-
-			const dates = datesInFile('note.md');
-
-			// Череда осталась наверху, отмеченный наперёд - в хвосте, куда его и
-			// дописали. Ничего не переставлялось.
-			expect(dates).toEqual(['2026-08-30', '2026-08-23', '2026-08-22', '2026-08-29']);
-		});
-
-		it('лежащие сверху выполненные остаются на месте', async () => {
-			// Файл, сложившийся раньше: выполненные сверху, актуальный внизу.
-			await setup({
-				files: {
-					'note.md': taskFileText(
-						{ date: '2026-08-23', done: '2026-08-22', body: ['- [x] Дело'] },
-						{ date: '2026-08-29', done: '2026-08-22', body: ['- [x] Дело'] },
-						{
-							date: '2026-08-30',
-							repeat: 'Каждую неделю в Субботу, Воскресенье',
-							body: ['- [ ] Дело'],
-						},
-					),
-				},
-			});
-
-			await map.toggleCheckbox(chain()!.key, 0);
-
-			const dates = datesInFile('note.md');
-
-			// Новый блок встал над закрытым, верх файла не тронут.
-			expect(dates).toEqual(['2026-08-23', '2026-08-29', '2026-09-05', '2026-08-30']);
-		});
-
-		it('череда перескакивает день, у которого уже есть блок', async () => {
-			await setup(weekend());
-
-			await map.toggleCheckbox('/note.md#0', 0, '2026-08-29');
-
-			// Закрываем текущий: 23-е свободно.
-			await map.toggleCheckbox(chain()!.key, 0);
-			expect(chain()).toMatchObject({ date: '2026-08-23' });
-
-			// Закрываем 23-е: 29-е занято отмеченным наперёд блоком, идём на 30-е.
-			await map.toggleCheckbox(chain()!.key, 0);
-			expect(chain()).toMatchObject({ date: '2026-08-30' });
-		});
-
-		it('день карточки совпал с датой показа - новый блок не заводится', async () => {
-			await setup(weekend());
-
-			await map.toggleCheckbox('/note.md#0', 0, '2026-08-22');
-
-			expect(map.all().filter((task) => task.repeat !== null)).toHaveLength(1);
-			expect(double.vault.contentOf('note.md')).toContain('📅 2026-08-23');
-		});
-
-		it('мусорный день блока не заводит', async () => {
-			await setup(weekend());
-
-			await map.toggleCheckbox('/note.md#0', 0, 'суббота');
-
-			// Отметка ушла в текущий блок, как обычная.
-			expect(map.all()).toHaveLength(2);
-			expect(chain()).toMatchObject({ date: '2026-08-23' });
+		expect(propsOf(PATH)).toMatchObject({ 'Дата выполнения': TODAY, Повтор: null });
+		// Рядом с выполненным, а не в папке из настроек; время - как у выполненного.
+		expect(vault.contentOf(`Задачи/${NOW_NAME}.md`)).toBe([
+			'---',
+			'Задача: Полить фикус',
+			'Выполнено: false',
+			'Дата и время: 2026-08-16T07:30:00',
+			'Дата выполнения:',
+			'Повтор: Каждую неделю Суббота, Воскресенье',
+			'Дата переноса:',
+			'Подзадача-1: Налить воды',
+			'Подзадача-1-выполнено: false',
+			'---',
+			'',
+		].join('\n'));
+		expect(map.byPath(`Задачи/${NOW_NAME}.md`)).toMatchObject({
+			date: '2026-08-16',
+			dateTime: '2026-08-16T07:30:00',
+			repeat: 'Каждую неделю Суббота, Воскресенье',
 		});
 	});
 
-	describe('перенос задачи', () => {
-		const chain = () => map.all().find((task) => task.repeat !== null);
+	it('сняли галочку у выполненного повтора - повтор не возвращается, второй файл не создаётся', async () => {
+		await setup({ files: { [PATH]: taskFileText({ repeat: 'Каждый день' }) } });
 
-		it('разовая задача просто получает другую 📅', async () => {
-			await setup({ files: { 'note.md': taskFileText({ date: '2026-08-13' }) } });
+		await editFile(PATH, { checked: true, repeat: 'Каждый день' });
+		const files = vault.paths().length;
+		await editFile(PATH, { checked: false, doneDate: TODAY });
 
-			await map.moveTask('/note.md#0', '2026-08-20');
+		expect(propsOf(PATH)).toMatchObject({ Повтор: null, 'Дата выполнения': null });
+		expect(vault.paths()).toHaveLength(files);
+	});
 
-			expect(map.all()).toHaveLength(1);
-			expect(map.all()[0]).toMatchObject({ date: '2026-08-20' });
-			expect(double.vault.contentOf('note.md')).not.toContain('2026-08-13');
+	it('вписали дату переноса повторной - повтор очищается, следующий файл по «Дата и время»', async () => {
+		await setup({ files: { [PATH]: taskFileText({ date: '2026-08-15T08:00:00', repeat: 'Каждую неделю Суббота' }) } });
+
+		await editFile(PATH, { date: '2026-08-15T08:00:00', move: '2026-08-17', repeat: 'Каждую неделю Суббота' });
+
+		expect(propsOf(PATH)).toMatchObject({ 'Дата и время': '2026-08-15T08:00:00', 'Дата переноса': '2026-08-17', Повтор: null });
+		expect(propsOf(`Задачи/${NOW_NAME}.md`)).toMatchObject({
+			'Дата и время': '2026-08-22T08:00:00',
+			Повтор: 'Каждую неделю Суббота',
+			'Дата переноса': null,
+		});
+		expect(map.byPath(PATH)).toMatchObject({ move: '2026-08-17', repeat: null });
+	});
+
+	it('дата переноса у обычной задачи файл не трогает', async () => {
+		await setup({ files: { [PATH]: taskFileText() } });
+
+		await editFile(PATH, { move: '2026-08-20' });
+
+		expect(app.fileManager.calls).toHaveLength(0);
+		expect(vault.paths()).toEqual([PATH]);
+		expect(map.byPath(PATH)?.move).toBe('2026-08-20');
+	});
+
+	it('удалили подзадачу из середины - остальные перенумеровываются', async () => {
+		await setup({
+			files: { [PATH]: taskFileText({ subtasks: [['Раз', true], ['Два', false], ['Три', true]] }) },
 		});
 
-		it('повторная: экземпляр уходит вниз с ↔️ новой даты, череда шагает дальше', async () => {
-			await setup({
-				files: {
-					'note.md': taskFileText({
-						date: '2026-08-22',
-						repeat: 'Каждую неделю в Субботу',
-						body: ['- [ ] Полить фикус'],
-					}),
-				},
-			});
+		await vault.modify(new TFile(PATH), [
+			'---',
+			'Задача: Задача',
+			'Выполнено: false',
+			'Подзадача-1: Раз',
+			'Подзадача-1-выполнено: true',
+			'Подзадача-3: Три',
+			'Подзадача-3-выполнено: true',
+			'---',
+			'',
+		].join('\n'));
+		await settle();
 
-			await map.moveTask('/note.md#0', '2026-08-25');
-
-			// В 📅 экземпляра - день череды, с которого он уехал, новая дата - в ↔️.
-			expect(double.vault.contentOf('note.md')).toBe([
-				'',
-				'- [ ] Полить фикус 📅 2026-08-29 🔁 Каждую неделю в Субботу',
-				'- [ ] Полить фикус 📅 2026-08-22 ↔️ 2026-08-25',
-				'',
-			].join('\n'));
-		});
-
-		it('перенесённый блок повтора не ведёт', async () => {
-			await setup({
-				files: {
-					'note.md': taskFileText({ date: '2026-08-22', repeat: 'Каждую неделю в Субботу' }),
-				},
-			});
-
-			await map.moveTask('/note.md#0', '2026-08-25');
-
-			expect(map.all().find((task) => task.move === '2026-08-25')).toMatchObject({
-				date: '2026-08-22',
-				repeat: null,
-				done: null,
-			});
-		});
-
-		it('перенос назад череду не возвращает', async () => {
-			await setup({
-				files: {
-					'note.md': taskFileText({ date: '2026-08-22', repeat: 'Каждую неделю в Субботу' }),
-				},
-			});
-
-			await map.moveTask('/note.md#0', '2026-08-21');
-
-			expect(chain()).toMatchObject({ date: '2026-08-29' });
-			expect(map.all().map(showDate).sort()).toEqual(['2026-08-21', '2026-08-29']);
-		});
-
-		it('перенос на занятый чередой день её через него перешагивает', async () => {
-			await setup({
-				files: {
-					'note.md': taskFileText({
-						date: '2026-08-22',
-						repeat: 'Каждую неделю в Субботу, Воскресенье',
-					}),
-				},
-			});
-
-			// Переносим ровно на следующий день череды - он занят перенесённым.
-			await map.moveTask('/note.md#0', '2026-08-23');
-
-			expect(chain()).toMatchObject({ date: '2026-08-29' });
-		});
-
-		it('отметки переезжают с экземпляром, череда начинает с чистого тела', async () => {
-			await setup({
-				files: {
-					'note.md': taskFileText({
-						date: '2026-08-22',
-						repeat: 'Каждую неделю в Субботу',
-						body: ['- [x] Раз', '\t- [ ] Два'],
-					}),
-				},
-			});
-
-			await map.moveTask('/note.md#0', '2026-08-25');
-
-			expect(map.all().find((task) => task.move === '2026-08-25')?.body)
-				.toBe('- [x] Раз\n\t- [ ] Два');
-			expect(chain()?.body).toBe('- [ ] Раз\n\t- [ ] Два');
-		});
-
-		it('имя файла при переносе не меняется', async () => {
-			await setup({
-				files: { 'Задачи/2026-08-13 - Дело.md': taskFileText({ date: '2026-08-13' }) },
-				tasksFolderPath: '/Задачи',
-			});
-
-			await map.moveTask('/Задачи/2026-08-13 - Дело.md#0', '2026-08-20');
-
-			expect(double.vault.paths()).toEqual(['Задачи/2026-08-13 - Дело.md']);
-		});
-
-		it('мусорную дату не пишет', async () => {
-			await setup({ files: { 'note.md': taskFileText({ date: '2026-08-13' }) } });
-
-			await map.moveTask('/note.md#0', 'завтра');
-
-			expect(double.vault.calls.process).toBe(0);
-		});
-
-		it('перенос на тот же день ничего не пишет', async () => {
-			await setup({ files: { 'note.md': taskFileText({ date: '2026-08-13' }) } });
-
-			await map.moveTask('/note.md#0', '2026-08-13');
-
-			expect(double.vault.calls.process).toBe(0);
-		});
-
-		it('перенос с расчётного дня: экземпляр с 📅 этого дня и ↔️ новой даты, череда на месте', async () => {
-			await setup({
-				files: {
-					'note.md': taskFileText({
-						date: '2026-08-29',
-						repeat: 'Каждую неделю в Субботу, Воскресенье',
-						body: ['- [ ] Полить фикус'],
-					}),
-				},
-			});
-
-			// 30 августа - воскресенье, расчётный день череды: своего блока у него нет.
-			await map.moveTask('/note.md#0', '2026-09-03', '2026-08-30');
-
-			// Суббота 29-го осталась, воскресенье уехало на четверг 3-е.
-			expect(double.vault.contentOf('note.md')).toBe([
-				'',
-				'- [ ] Полить фикус 📅 2026-08-29 🔁 Каждую неделю в Субботу, Воскресенье',
-				'- [ ] Полить фикус 📅 2026-08-30 ↔️ 2026-09-03',
-				'',
-			].join('\n'));
-		});
-
-		it('перенос расчётного дня череду не двигает', async () => {
-			await setup({
-				files: {
-					'note.md': taskFileText({ date: '2026-08-13', repeat: 'Каждый день' }),
-				},
-			});
-
-			await map.moveTask('/note.md#0', '2026-08-20', '2026-08-16');
-
-			expect(chain()).toMatchObject({ date: '2026-08-13', move: null });
-			expect(map.all().find((task) => task.move === '2026-08-20'))
-				.toMatchObject({ date: '2026-08-16', repeat: null });
-		});
-
-		it('уехавший расчётный день череда перескакивает, когда до него доходит', async () => {
-			await setup({
-				files: {
-					'note.md': taskFileText({ date: '2026-08-13', repeat: 'Каждый день' }),
-				},
-			});
-
-			await map.moveTask('/note.md#0', '2026-08-20', '2026-08-14');
-			await map.toggleCheckbox('/note.md#0', 0);
-
-			// 14-е держит экземпляр своей 📅: следующий день череды - 15-е.
-			expect(chain()).toMatchObject({ date: '2026-08-15' });
-		});
-
-		it('новую дату перенесённого расчётного дня череда тоже перескакивает', async () => {
-			await setup({
-				files: {
-					'note.md': taskFileText({ date: '2026-08-13', repeat: 'Каждый день' }),
-				},
-			});
-
-			// 14-е перенесли на 15-е: оба дня заняты экземпляром, череде - 16-е.
-			await map.moveTask('/note.md#0', '2026-08-15', '2026-08-14');
-			await map.toggleCheckbox('/note.md#0', 0);
-
-			expect(chain()).toMatchObject({ date: '2026-08-16' });
-		});
-
-		it('расчётный день, перенесённый на день самой цепочки, сдвигает её дальше', async () => {
-			await setup({
-				files: {
-					'note.md': taskFileText({ date: '2026-08-13', repeat: 'Каждый день' }),
-				},
-			});
-
-			// 14-е перенесли на 13-е, где стоит сама цепочка: на дне была бы вторая
-			// карточка той же задачи. Цепочка шагает через занятое 14-е на 15-е.
-			await map.moveTask('/note.md#0', '2026-08-13', '2026-08-14');
-
-			expect(double.vault.contentOf('note.md')).toBe([
-				'',
-				'- [ ] Задача 📅 2026-08-15 🔁 Каждый день',
-				'- [ ] Задача 📅 2026-08-14 ↔️ 2026-08-13',
-				'',
-			].join('\n'));
-		});
-
-		it('отметка перенесённого блока просто закрывает его', async () => {
-			await setup({
-				files: {
-					'note.md': taskFileText({ date: '2026-08-13', move: '2026-08-20' }),
-				},
-			});
-
-			// День карточки - день показа: свой блок дня заводить не надо, блок уже есть.
-			await map.toggleCheckbox('/note.md#0', 0, '2026-08-20');
-
-			expect(map.all()).toHaveLength(1);
-			expect(map.all()[0]).toMatchObject({ date: '2026-08-13', move: '2026-08-20', done: TODAY });
-		});
-
-		it('у блока с ↔️ перенос меняет только ↔️: 📅 держит его день в череде', async () => {
-			await setup({
-				files: {
-					'note.md': taskFileText({ date: '2026-08-13', move: '2026-08-20' }),
-				},
-			});
-
-			await map.moveTask('/note.md#0', '2026-08-25');
-
-			expect(map.all()[0]).toMatchObject({ date: '2026-08-13', move: '2026-08-25' });
-			expect(double.vault.contentOf('note.md')).toBe('\n- [ ] Задача 📅 2026-08-13 ↔️ 2026-08-25\n');
-		});
-
-		it('блок с ↔️, вернувшийся на свою 📅, теряет ↔️', async () => {
-			await setup({
-				files: {
-					'note.md': taskFileText({ date: '2026-08-13', move: '2026-08-20' }),
-				},
-			});
-
-			await map.moveTask('/note.md#0', '2026-08-13');
-
-			expect(double.vault.contentOf('note.md')).toBe('\n- [ ] Задача 📅 2026-08-13\n');
-		});
-
-		it('перенесённый расчётный день начинает с чистого тела, цепочка своё не теряет', async () => {
-			await setup({
-				files: {
-					'note.md': taskFileText({
-						date: '2026-08-22',
-						repeat: 'Каждую неделю в Субботу, Воскресенье',
-						body: ['- [x] Раз', '\t- [ ] Два'],
-					}),
-				},
-			});
-
-			await map.moveTask('/note.md#0', '2026-08-25', '2026-08-23');
-
-			// Экземпляр расчётного дня - с чистым телом: отмечать там было нечего.
-			// Цепочка осталась на субботе 22-го вместе со своими отметками.
-			expect(chain()).toMatchObject({ date: '2026-08-22' });
-			expect(chain()?.body).toBe('- [x] Раз\n\t- [ ] Два');
-			expect(map.all().find((task) => task.move === '2026-08-25')?.body)
-				.toBe('- [ ] Раз\n\t- [ ] Два');
-		});
-
-		it('перенос перенесённого на день его показа ничего не пишет', async () => {
-			await setup({
-				files: {
-					'note.md': taskFileText({ date: '2026-08-13', move: '2026-08-20' }),
-				},
-			});
-
-			await map.moveTask('/note.md#0', '2026-08-20');
-
-			expect(double.vault.calls.process).toBe(0);
-		});
-
-		it('перенос будущей субботы на пятницу: среда остаётся, суббота пропускается', async () => {
-			// Случай из «Постирать вещи из корзины для белья»: повтор стоит на среду,
-			// переносят субботу той же недели на пятницу.
-			await setup({
-				files: {
-					'note.md': taskFileText({
-						date: '2026-08-19',
-						repeat: 'Каждую неделю в Среду, Субботу',
-						body: ['- [ ] Постирать'],
-					}),
-				},
-			});
-
-			await map.moveTask('/note.md#0', '2026-08-21', '2026-08-22');
-
-			expect(double.vault.contentOf('note.md')).toBe([
-				'',
-				'- [ ] Постирать 📅 2026-08-19 🔁 Каждую неделю в Среду, Субботу',
-				'- [ ] Постирать 📅 2026-08-22 ↔️ 2026-08-21',
-				'',
-			].join('\n'));
-
-			// Закрыли среду - череда перескакивает уехавшую субботу на следующую среду.
-			await map.toggleCheckbox('/note.md#0', 0);
-
-			expect(chain()).toMatchObject({ date: '2026-08-26' });
-		});
-
-		it('перенос расчётного дня на него же ничего не пишет', async () => {
-			await setup({
-				files: {
-					'note.md': taskFileText({ date: '2026-08-13', repeat: 'Каждый день' }),
-				},
-			});
-
-			await map.moveTask('/note.md#0', '2026-08-16', '2026-08-16');
-
-			expect(double.vault.calls.process).toBe(0);
+		expect(propsOf(PATH)).toEqual({
+			Задача: 'Задача',
+			Выполнено: false,
+			'Подзадача-1': 'Раз',
+			'Подзадача-1-выполнено': true,
+			'Подзадача-2': 'Три',
+			'Подзадача-2-выполнено': true,
 		});
 	});
 
-	describe('несколько задач в одном месячном файле', () => {
-		/** Ежедневная задача сегодня и чужие блоки рядом с ней. */
-		const monthFile = (...others: Parameters<typeof taskFileText>) => ({
-			'2026-08.md': taskFileText(
-				{ date: TODAY, repeat: 'Каждый день', body: ['- [ ] Полить фикус'] },
-				...others,
-			),
-		});
+	it('правка без перехода файл не трогает', async () => {
+		await setup({ files: { [PATH]: taskFileText({ text: 'Старый текст' }) } });
 
-		/** Текущий блок цепочки - тот, у которого остался 🔁. */
-		const chainDate = (): string | undefined =>
-			map.all().find((task) => task.repeat !== null)?.date;
+		await editFile(PATH, { text: 'Новый текст', repeat: 'Каждый день' });
 
-		it('повтор не перескакивает день чужой задачи', async () => {
-			await setup({ files: monthFile({ date: '2026-08-14', body: ['- [ ] Позвонить'] }) });
+		expect(app.fileManager.calls).toHaveLength(0);
+		expect(map.byPath(PATH)).toMatchObject({ text: 'Новый текст', repeat: 'Каждый день' });
+	});
 
-			await map.toggleCheckbox('/2026-08.md#0', 0);
+	it('своя запись автоматику повторно не запускает', async () => {
+		await setup({ files: { [PATH]: taskFileText({ repeat: 'Каждый день' }) } });
 
-			expect(chainDate()).toBe('2026-08-14');
-		});
+		await editFile(PATH, { checked: true, repeat: 'Каждый день' });
+		await settle();
+		await settle();
 
-		it('свой занятый день перескакивает, чужой - нет', async () => {
-			await setup({
-				files: monthFile(
-					{ date: '2026-08-14', done: TODAY, body: ['- [x] Полить фикус'] },
-					{ date: '2026-08-15', body: ['- [ ] Позвонить'] },
-				),
-			});
+		expect(app.fileManager.calls).toHaveLength(1);
+		expect(vault.paths()).toHaveLength(2);
+	});
 
-			await map.toggleCheckbox('/2026-08.md#0', 0);
+	it('не получилось записать - уведомление, карта цела', async () => {
+		await setup({ files: { [PATH]: taskFileText() } });
+		app.fileManager.fails = true;
+		vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
-			expect(chainDate()).toBe('2026-08-15');
-		});
+		await editFile(PATH, { checked: true });
 
-		it('перенос: череда шагает на ближайший день, занятый чужой задачей', async () => {
-			await setup({ files: monthFile({ date: '2026-08-14', body: ['- [ ] Позвонить'] }) });
+		expect(Notice.messages).toContain('Не удалось записать задачу');
+		expect(map.byPath(PATH)).not.toBeNull();
+	});
+});
 
-			await map.moveTask('/2026-08.md#0', '2026-08-20');
+describe('галочка из карточки', () => {
+	const PATH = 'Задачи/20260810_090000.md';
 
-			expect(chainDate()).toBe('2026-08-14');
+	it('галочка задачи пишет «Выполнено», отмечено всё - и дату выполнения', async () => {
+		await setup({ files: { [PATH]: taskFileText() } });
+
+		await map.toggle(PATH, 0);
+
+		expect(propsOf(PATH)).toMatchObject({ Выполнено: true, 'Дата выполнения': TODAY });
+		// Карта сведена сразу, без ожидания событий хранилища.
+		expect(map.byPath(PATH)?.doneDate).toBe(TODAY);
+	});
+
+	it('галочка подзадачи пишет её «-выполнено»', async () => {
+		await setup({ files: { [PATH]: taskFileText({ subtasks: [['Раз', false], ['Два', false]] }) } });
+
+		await map.toggle(PATH, 2);
+
+		expect(propsOf(PATH)).toMatchObject({
+			Выполнено: false,
+			'Подзадача-1-выполнено': false,
+			'Подзадача-2-выполнено': true,
+			'Дата выполнения': null,
 		});
 	});
 
-	describe('создание задачи', () => {
-		it('файла года нет - создаётся YYYY.md с одной задачей', async () => {
-			await setup({ files: {}, tasksFolderPath: '/' });
-
-			const path = await map.createTask('2026-08-20', 'Купить молоко / творог');
-
-			expect(path).toBe('2026.md');
-			expect(double.vault.contentOf(path!)).toBe(
-				'\n- [ ] Купить молоко / творог 📅 2026-08-20\n'
-			);
-			expect(map.all()[0]).toMatchObject({ date: '2026-08-20', body: '- [ ] Купить молоко / творог' });
+	it('последняя галочка повторной задачи создаёт файл следующего повтора', async () => {
+		await setup({
+			files: { [PATH]: taskFileText({ checked: true, repeat: 'Каждый день', subtasks: [['Раз', false]] }) },
 		});
 
-		it('файл года есть - задача любого месяца дописывается под всеми задачами', async () => {
-			await setup({ files: {}, tasksFolderPath: '/' });
+		await map.toggle(PATH, 1);
 
-			await map.createTask('2026-08-20', 'Раз');
-			const second = await map.createTask('2026-11-05', 'Два');
-
-			expect(second).toBe('2026.md');
-			expect(double.vault.paths()).toEqual(['2026.md']);
-			expect(double.vault.contentOf('2026.md')).toBe([
-				'',
-				'- [ ] Раз 📅 2026-08-20',
-				'- [ ] Два 📅 2026-11-05',
-				'',
-			].join('\n'));
-			expect(map.all().map((task) => [task.key, task.date])).toEqual([
-				['/2026.md#0', '2026-08-20'],
-				['/2026.md#1', '2026-11-05'],
-			]);
-		});
-
-		it('год берётся по дате задачи, а не по сегодняшнему дню', async () => {
-			await setup({ files: {}, tasksFolderPath: '/' });
-
-			expect(await map.createTask('2027-01-05', 'Зимой')).toBe('2027.md');
-			expect(await map.createTask(TODAY, 'Сегодня')).toBe('2026.md');
-		});
-
-		it('прежний месячный файл не трогается: новая задача идёт в годовой', async () => {
-			const month = taskFileText({ date: '2026-08-14', body: ['- [ ] Старая'] });
-			await setup({ files: { '2026-08.md': month }, tasksFolderPath: '/' });
-
-			expect(await map.createTask('2026-08-20', 'Новая')).toBe('2026.md');
-			expect(double.vault.contentOf('2026-08.md')).toBe(month);
-			expect(map.all()).toHaveLength(2);
-		});
-
-		it('лежащие в файле блоки не двигаются и автоматику не будят', async () => {
-			const before = taskFileText(
-				{ date: '2026-08-14', repeat: 'Каждый день', body: ['- [ ] Полить фикус'] },
-				{ date: TODAY, done: TODAY, body: ['- [x] Полить фикус'] },
-			);
-			await setup({ files: { 'Задачи/2026.md': before }, tasksFolderPath: '/Задачи' });
-
-			await map.createTask('2026-08-20', 'Дело');
-
-			expect(double.vault.contentOf('Задачи/2026.md')).toBe([
-				'',
-				'- [ ] Полить фикус 📅 2026-08-14 🔁 Каждый день',
-				`- [x] Полить фикус 📅 ${TODAY} ✅ ${TODAY}`,
-				'- [ ] Дело 📅 2026-08-20',
-				'',
-			].join('\n'));
-			expect(double.vault.calls.process).toBe(1);
-			expect(map.all()).toHaveLength(3);
-		});
-
-		it('файл года не записался - null и сообщение, карта прежняя', async () => {
-			await setup({ files: { '2026.md': taskFileText() }, tasksFolderPath: '/' });
-			double.vault.failures.modify = new Set(['2026.md']);
-			vi.spyOn(console, 'error').mockImplementation(() => {});
-
-			expect(await map.createTask('2026-08-20', 'Дело')).toBeNull();
-			expect(Notice.messages).toContain('Не удалось создать задачу');
-			expect(map.all()).toHaveLength(1);
-		});
-
-		it('папки задач нет - создаётся при первой записи', async () => {
-			await setup({ files: {}, tasksFolderPath: '/Календарь задач' });
-
-			const path = await map.createTask('2026-08-20', 'Дело');
-
-			expect(path).toBe('Календарь задач/2026.md');
-			expect(map.all()).toHaveLength(1);
-		});
-
-		it('папка для новых задач читается в момент создания, без пересбора карты', async () => {
-			await setup({
-				tasksFolderPath: '/Задачи',
-				files: { 'note.md': taskFileText() },
-				folders: ['Задачи', 'Другое'],
-			});
-
-			double.plugin.settings.tasksFolderPath = '/Другое';
-			const path = await map.createTask('2026-08-20', 'Дело');
-
-			expect(path).toBe('Другое/2026.md');
-			expect(map.all().map((task) => task.key).sort()).toEqual([
-				'/note.md#0',
-				'/Другое/2026.md#0',
-			]);
-		});
-
-		it('пустой текст задачу не создаёт', async () => {
-			await setup({ files: {}, tasksFolderPath: '/' });
-
-			expect(await map.createTask('2026-08-20', '   ')).toBeNull();
-			expect(double.vault.paths()).toHaveLength(0);
+		expect(propsOf(PATH)).toMatchObject({ 'Дата выполнения': TODAY, Повтор: null });
+		expect(map.byPath(`Задачи/${NOW_NAME}.md`)).toMatchObject({
+			date: '2026-08-14',
+			repeat: 'Каждый день',
+			checked: false,
+			subtasks: [{ number: 1, text: 'Раз', checked: false }],
 		});
 	});
 
-	describe('события хранилища', () => {
-		it('созданный файл попадает в карту', async () => {
-			await setup({ files: {}, tasksFolderPath: '/' });
+	it('снятая галочка выполненной очищает дату выполнения', async () => {
+		await setup({ files: { [PATH]: taskFileText({ checked: true, doneDate: TODAY }) } });
 
-			await double.vault.create('новая.md', taskFileText({ date: '2026-08-13' }));
-			await settle();
+		await map.toggle(PATH, 0);
 
-			expect(map.all()).toHaveLength(1);
-		});
-
-		it('удалённый файл уходит из карты', async () => {
-			await setup({ files: { 'note.md': taskFileText() } });
-
-			await double.vault.delete(fileOf('note.md'));
-			await settle();
-
-			expect(map.all()).toHaveLength(0);
-		});
-
-		it('переехавшая задача остаётся в карте одна, по новому пути', async () => {
-			await setup({
-				tasksFolderPath: '/Задачи',
-				files: { 'Задачи/note.md': taskFileText() },
-				folders: ['Задачи', 'Другое'],
-			});
-
-			await double.vault.rename(fileOf('Задачи/note.md'), 'Другое/note.md');
-			await settle();
-
-			expect(map.all().map((task) => task.key)).toEqual(['/Другое/note.md#0']);
-		});
-
-		it('файл, переименованный не в .md, уходит из карты', async () => {
-			await setup({ files: { 'note.md': taskFileText() } });
-
-			await double.vault.rename(fileOf('note.md'), 'note.txt');
-			await settle();
-
-			expect(map.all()).toHaveLength(0);
-		});
-
-		it('удалённая папка уносит с собой все свои задачи', async () => {
-			await setup({
-				files: {
-					'Задачи/вложенная/раз.md': taskFileText(),
-					'Задачи/вложенная/два.md': taskFileText(),
-					'Задачи/своя.md': taskFileText(),
-				},
-			});
-
-			// Obsidian шлёт одно событие на папку, а не на каждый файл внутри.
-			await double.vault.deleteFolder('Задачи/вложенная');
-			await settle();
-
-			expect(map.all().map((task) => task.key)).toEqual(['/Задачи/своя.md#0']);
-		});
-
-		it('переехавшая папка переезжает в карте целиком', async () => {
-			await setup({
-				folders: ['Задачи', 'Черновики'],
-				files: { 'Черновики/раз.md': taskFileText(), 'Черновики/два.md': taskFileText() },
-			});
-
-			expect(map.all()).toHaveLength(2);
-
-			// Obsidian шлёт одно событие на папку, а не на каждый файл внутри.
-			await double.vault.renameFolder('Черновики', 'Задачи/Черновики');
-			await settle();
-
-			expect(map.all().map((task) => task.key).sort()).toEqual([
-				'/Задачи/Черновики/два.md#0',
-				'/Задачи/Черновики/раз.md#0',
-			]);
-		});
-
-		it('после stop события не обрабатываются', async () => {
-			await setup({ files: {}, tasksFolderPath: '/' });
-
-			map.stop();
-			await double.vault.create('новая.md', taskFileText());
-			await settle();
-
-			expect(map.all()).toHaveLength(0);
-		});
-
+		expect(propsOf(PATH)).toMatchObject({ Выполнено: false, 'Дата выполнения': null });
 	});
 
-	describe('строки блока для подсветки', () => {
-		it('блок в середине файла - от строки задачи до последней строки тела', async () => {
-			await setup({
-				files: {
-					'note.md': taskFileText(
-						{ date: '2026-08-14', repeat: 'Каждый день' },
-						{
-							date: '2026-08-13',
-							done: '2026-08-13',
-							body: ['- [x] Задача', '\t- [x] Подзадача'],
-						},
-						{ date: '2026-08-12', done: '2026-08-12', body: ['- [x] Задача'] },
-					),
-				},
-			});
+	it('номер вне карточки ничего не пишет', async () => {
+		await setup({ files: { [PATH]: taskFileText() } });
 
-			// Строка 0 - пустая, первый блок занимает строку 1, второй - 2 и 3.
-			expect(await map.locate('/note.md#1')).toEqual({
-				start: { line: 2, col: 0 },
-				end: { line: 3, col: '\t- [x] Подзадача'.length },
-			});
-		});
+		await map.toggle(PATH, 1);
+		await map.toggle('нет такого.md', 0);
 
-		it('номер блока считает и невалидные блоки', async () => {
-			await setup({
-				files: {
-					'note.md': [
-						'',
-						'- [ ] Черновик 🔁 Каждый день',
-						'\tпросто текст, даты нет',
-						'- [ ] Задача 📅 2026-08-14',
-						'\t- [ ] Подзадача',
-						'',
-					].join('\n'),
-				},
-			});
-
-			const [task] = map.all();
-
-			expect(task.key).toBe('/note.md#1');
-			expect(await map.locate(task.key)).toEqual({
-				start: { line: 3, col: 0 },
-				end: { line: 4, col: '\t- [ ] Подзадача'.length },
-			});
-		});
-
-		it('подсветка кончается на теле задачи, заголовок и список ниже не захватывает', async () => {
-			await setup({
-				files: {
-					'note.md': [
-						'# Тромбофилия',
-						'',
-						'- [ ] Записаться на сдачу 📅 2026-10-19',
-						'\t- [ ] Взять направление',
-						'',
-						'# Кожа',
-						'- [ ] Сходить к дерматологу',
-						'\t- [ ] Акне',
-						'',
-					].join('\n'),
-				},
-			});
-
-			expect(await map.locate('/note.md#0')).toEqual({
-				start: { line: 2, col: 0 },
-				end: { line: 3, col: '\t- [ ] Взять направление'.length },
-			});
-		});
-
-		it('неизвестная задача - null', async () => {
-			await setup({ files: { 'note.md': taskFileText() } });
-
-			expect(await map.locate('/нет.md#0')).toBeNull();
-		});
-
-		it('файл не прочитался - null, без исключения', async () => {
-			await setup({ files: { 'note.md': taskFileText() } });
-			double.vault.failures.read = new Set(['note.md']);
-			const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-			expect(await map.locate('/note.md#0')).toBeNull();
-			expect(consoleError).toHaveBeenCalled();
-		});
-
-		it('поиск строк файл не правит', async () => {
-			await setup({ files: { 'note.md': taskFileText() } });
-
-			await map.locate('/note.md#0');
-
-			expect(double.vault.calls.process).toBe(0);
-			expect(double.vault.calls.modify).toBe(0);
-		});
+		expect(app.fileManager.calls).toHaveLength(0);
 	});
 
-	describe('подписчики', () => {
-		it('получают уведомление об изменении и отписываются', async () => {
-			await setup({ files: { 'note.md': taskFileText() } });
+	it('после своей записи событие хранилища ничего не повторяет', async () => {
+		await setup({ files: { [PATH]: taskFileText({ repeat: 'Каждый день' }) } });
 
-			const listener = vi.fn();
-			const unsubscribe = map.onChange(listener);
+		await map.toggle(PATH, 0);
+		await settle();
 
-			await map.toggleCheckbox('/note.md#0', 0);
-			expect(listener).toHaveBeenCalled();
+		expect(app.fileManager.calls).toHaveLength(1);
+		expect(vault.paths()).toHaveLength(2);
+	});
+});
 
-			unsubscribe();
-			listener.mockClear();
+describe('новая задача - пустой шаблон', () => {
+	it('файл ГГГГММДД_ЧЧММСС.md в папке из настроек, «Дата и время» - сейчас, остальное пустое, задачей пока не считается', async () => {
+		await setup({ folders: ['Задачи'], tasksFolderPath: '/Задачи/' });
 
-			await map.toggleCheckbox('/note.md#0', 0);
-			expect(listener).not.toHaveBeenCalled();
+		const path = await map.createBlankTask();
+
+		expect(path).toBe(`Задачи/${NOW_NAME}.md`);
+		expect(vault.contentOf(path!)).toBe([
+			'---',
+			'Задача:',
+			'Выполнено: false',
+			'Дата и время: 2026-08-13T12:00:00',
+			'Дата выполнения:',
+			'Повтор:',
+			'Дата переноса:',
+			'---',
+			'',
+		].join('\n'));
+		expect(map.byPath(path!)).toBeNull();
+	});
+
+	it('заполнили «Задача» - файл становится задачей и попадает в карту', async () => {
+		await setup();
+		const path = await map.createBlankTask();
+
+		await editFile(path!, { text: 'Купить молоко', date: '2026-08-20T09:00:00' });
+
+		expect(map.byPath(path!)).toMatchObject({ text: 'Купить молоко', dateTime: '2026-08-20T09:00:00' });
+		expect(app.fileManager.calls).toHaveLength(0);
+	});
+
+	it('корень хранилища и папка, которой нет, - с родителями', async () => {
+		await setup({ tasksFolderPath: '/' });
+		expect(await map.createBlankTask()).toBe(`${NOW_NAME}.md`);
+
+		await setup({ tasksFolderPath: 'Дела/Личные' });
+		expect(await map.createBlankTask()).toBe(`Дела/Личные/${NOW_NAME}.md`);
+		expect(vault.getAbstractFileByPath('Дела')).not.toBeNull();
+	});
+
+	it('две задачи в одну секунду - вторая с суффиксом', async () => {
+		await setup();
+
+		const paths = [await map.createBlankTask(), await map.createBlankTask(), await map.createBlankTask()];
+
+		expect(paths).toEqual([`${NOW_NAME}.md`, `${NOW_NAME}_2.md`, `${NOW_NAME}_3.md`]);
+	});
+
+	it('не получилось создать - уведомление и null', async () => {
+		await setup();
+		vault.failures.create = new Set([`${NOW_NAME}.md`]);
+		vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+		expect(await map.createBlankTask()).toBeNull();
+		expect(Notice.messages).toContain('Не удалось создать задачу');
+	});
+
+	it('пустой шаблон автоматику не запускает', async () => {
+		await setup();
+
+		await map.createBlankTask();
+		await settle();
+
+		expect(app.fileManager.calls).toHaveLength(0);
+	});
+});
+
+describe('события хранилища', () => {
+	it('новый файл задачи появляется, удалённый уходит', async () => {
+		await setup();
+
+		await vault.create('Новая.md', taskFileText({ text: 'Новая' }));
+		await settle();
+		expect(map.byPath('Новая.md')?.text).toBe('Новая');
+
+		await vault.delete(new TFile('Новая.md'));
+		await settle();
+		expect(map.all()).toEqual([]);
+	});
+
+	it('заметка становится задачей, когда в ней появилось «Задача», и перестаёт без него', async () => {
+		await setup({ files: { 'Заметка.md': '# Заметка\n' } });
+
+		await vault.modify(new TFile('Заметка.md'), taskFileText({ text: 'Теперь задача' }));
+		await settle();
+		expect(map.byPath('Заметка.md')?.text).toBe('Теперь задача');
+
+		await vault.modify(new TFile('Заметка.md'), '---\nДата и время: 2026-08-13T08:00:00\n---\n');
+		await settle();
+		expect(map.all()).toEqual([]);
+	});
+
+	it('переезд файла - задача по новому пути и только по нему', async () => {
+		await setup({ files: { 'Задачи/20260810_090000.md': taskFileText() }, folders: ['Архив'] });
+
+		await vault.rename(new TFile('Задачи/20260810_090000.md'), 'Архив/20260810_090000.md');
+		await settle();
+
+		expect(map.all().map((task) => task.path)).toEqual(['Архив/20260810_090000.md']);
+	});
+
+	it('удаление и переезд папки целиком', async () => {
+		await setup({
+			files: {
+				'Задачи/a.md': taskFileText({ text: 'А' }),
+				'Задачи/Вложенная/b.md': taskFileText({ text: 'Б' }),
+				'Другое/c.md': taskFileText({ text: 'В' }),
+			},
 		});
+
+		await vault.renameFolder('Задачи', 'Архив');
+		await settle();
+		expect(map.all().map((task) => task.path).sort())
+			.toEqual(['Архив/a.md', 'Архив/Вложенная/b.md', 'Другое/c.md']);
+
+		await vault.deleteFolder('Архив');
+		await settle();
+		expect(map.all().map((task) => task.path)).toEqual(['Другое/c.md']);
+	});
+
+	it('подписчики узнают об изменениях, отписка работает', async () => {
+		await setup();
+		const listener = vi.fn();
+		const unsubscribe = map.onChange(listener);
+
+		await map.createBlankTask();
+		expect(listener).toHaveBeenCalledTimes(1);
+
+		unsubscribe();
+		await map.createBlankTask();
+		expect(listener).toHaveBeenCalledTimes(1);
+	});
+
+	it('stop снимает подписки на хранилище', async () => {
+		await setup();
+
+		map.stop();
+
+		expect(vault.handlerCount('modify')).toBe(0);
+		expect(vault.handlerCount('create')).toBe(0);
+		expect(vault.handlerCount('delete')).toBe(0);
+		expect(vault.handlerCount('rename')).toBe(0);
 	});
 });

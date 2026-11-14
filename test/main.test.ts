@@ -3,9 +3,10 @@ import { flushPromises } from '@vue/test-utils';
 import TaskCalendarPlugin from '../src/TaskCalendarPlugin';
 import { DEFAULT_SETTINGS } from '../src/types';
 import { App, Platform, Setting, Vault, WorkspaceLeaf } from './mocks/obsidian';
-import { taskFileText, TODAY, useFixedClock } from './helpers';
+import { taskFileText, useFixedClock } from './helpers';
 
 const VIEW_TYPE = 'task-calendar';
+const LIST_TYPE = 'task-calendar-list';
 
 const createPlugin = (savedData: unknown = null, vault = new Vault()) => {
 	const app = new App(vault);
@@ -55,14 +56,17 @@ describe('настройки', () => {
 		const { plugin, mock } = createPlugin({
 			tasksFolderPath: 'Задачи',
 			openInRightSidebarOnMobile: true,
+			// Свёрнутые группы - настройка, которой не стало вместе с группами.
+			collapsedGroups: ['done'],
 			мусор: 1,
 		});
 
 		await plugin.loadSettings();
 
-		expect(plugin.settings).toEqual({ tasksFolderPath: 'Задачи' });
+		const expected = { tasksFolderPath: 'Задачи', calendarInList: false };
+		expect(plugin.settings).toEqual(expected);
 		// И обратно в файл они уже не уезжают.
-		expect(mock.savedData).toEqual({ tasksFolderPath: 'Задачи' });
+		expect(mock.savedData).toEqual(expected);
 	});
 
 	it('значение чужого типа заменяется умолчанием', async () => {
@@ -71,6 +75,34 @@ describe('настройки', () => {
 		await plugin.loadSettings();
 
 		expect(plugin.settings.tasksFolderPath).toBe(DEFAULT_SETTINGS.tasksFolderPath);
+	});
+
+	it('календарь в списке по умолчанию выключен, сохранённое важнее, не булево - умолчание', async () => {
+		const fresh = createPlugin(null);
+		await fresh.plugin.loadSettings();
+		expect(fresh.plugin.settings.calendarInList).toBe(false);
+
+		const saved = createPlugin({ calendarInList: true });
+		await saved.plugin.loadSettings();
+		expect(saved.plugin.settings.calendarInList).toBe(true);
+
+		const text = createPlugin({ calendarInList: 'да' });
+		await text.plugin.loadSettings();
+		expect(text.plugin.settings.calendarInList).toBe(false);
+	});
+
+	it('saveSettings сообщает подписчикам о смене настроек, после отписки - нет', async () => {
+		const { plugin } = createPlugin(null);
+		await plugin.loadSettings();
+		const listener = vi.fn();
+
+		const unsubscribe = plugin.onSettingsChange(listener);
+		await plugin.saveSettings();
+		expect(listener).toHaveBeenCalledTimes(1);
+
+		unsubscribe();
+		await plugin.saveSettings();
+		expect(listener).toHaveBeenCalledTimes(1);
 	});
 
 	it('не мутирует объект умолчаний', async () => {
@@ -103,14 +135,18 @@ describe('настройки', () => {
 });
 
 describe('onload', () => {
-	it('регистрирует view, команду, иконку и вкладку настроек', async () => {
+	it('регистрирует оба вида, одну команду, одну иконку и вкладку настроек', async () => {
 		const { plugin, mock } = createPlugin(null);
 
 		await plugin.onload();
 
-		expect(mock.registeredViews.has(VIEW_TYPE)).toBe(true);
-		expect(mock.commands.map((command) => command.id)).toEqual(['open-task-calendar']);
-		expect(mock.ribbonIcons).toHaveLength(1);
+		expect([...mock.registeredViews.keys()]).toEqual([VIEW_TYPE, LIST_TYPE]);
+		expect(mock.commands.map((command) => [command.id, command.name])).toEqual([
+			['open-task-list', 'Открыть список задач'],
+		]);
+		expect(mock.ribbonIcons.map((icon) => [icon.icon, icon.title])).toEqual([
+			['calendar-check-2', 'Открыть список задач'],
+		]);
 		expect(mock.settingTabs).toHaveLength(1);
 	});
 
@@ -121,70 +157,105 @@ describe('onload', () => {
 
 		// Без этой регистрации core-плагин «Предпросмотр страницы» нас не слушает.
 		expect(mock.hoverLinkSources).toEqual([
-			{ id: VIEW_TYPE, display: 'Task calendar', defaultMod: true },
+			{ id: 'task-calendar', display: 'Task calendar', defaultMod: true },
 		]);
 	});
 
-	it('фабрика view отдаёт представление нужного типа', async () => {
+	it('фабрики отдают представления нужного типа', async () => {
 		const { plugin, mock } = createPlugin(null);
 		await plugin.onload();
 
-		const factory = mock.registeredViews.get(VIEW_TYPE);
-		const view = factory?.(new WorkspaceLeaf()) as {
-			getViewType(): string;
-			getDisplayText(): string;
-			getIcon(): string;
+		const describeView = (type: string) => {
+			const view = mock.registeredViews.get(type)?.(new WorkspaceLeaf()) as {
+				getViewType(): string;
+				getDisplayText(): string;
+				getIcon(): string;
+			};
+
+			return [view.getViewType(), view.getDisplayText(), view.getIcon()];
 		};
 
-		expect(view.getViewType()).toBe(VIEW_TYPE);
-		expect(view.getDisplayText()).toBe('Task calendar');
-		expect(view.getIcon()).toBe('calendar');
+		expect(describeView(VIEW_TYPE)).toEqual([VIEW_TYPE, 'Календарь задач', 'calendar']);
+		expect(describeView(LIST_TYPE)).toEqual([LIST_TYPE, 'Список задач', 'list-checks']);
 	});
 
-	it('команда и иконка открывают календарь', async () => {
+	it('команда и иконка открывают список', async () => {
 		const { plugin, mock } = createPlugin(null);
 		await plugin.onload();
-		const openCalendar = vi.spyOn(plugin, 'openCalendar').mockResolvedValue();
+		const openList = vi.spyOn(plugin, 'openList').mockResolvedValue();
 
 		await mock.commands[0].callback?.();
 		await mock.ribbonIcons[0].callback();
 		await flushPromises();
 
-		expect(openCalendar).toHaveBeenCalledTimes(2);
+		expect(openList).toHaveBeenCalledTimes(2);
 	});
 });
 
-describe('openCalendar', () => {
-	it('открывает новую вкладку, когда календарь ещё не открыт', async () => {
+describe('открытие списка', () => {
+	it('список открывается вкладкой в основной области', async () => {
 		const { app, plugin } = createPlugin(null);
 		await plugin.loadSettings();
 
-		await plugin.openCalendar();
+		await plugin.openList();
 
-		expect(app.workspace.leaves).toHaveLength(1);
-		expect(app.workspace.leaves[0].viewState).toEqual({ type: VIEW_TYPE, active: true });
+		expect(app.workspace.getLeafCalls).toEqual([true]);
+		expect(app.workspace.getRightLeafCalls).toHaveLength(0);
+		expect(app.workspace.leaves[0].viewState).toEqual({ type: LIST_TYPE, active: true });
 		expect(app.workspace.activeLeaf).toBe(app.workspace.leaves[0]);
 	});
 
-	it('переиспользует уже открытую вкладку', async () => {
+	it('уже открытый список переиспользуется', async () => {
 		const { app, plugin } = createPlugin(null);
 		await plugin.loadSettings();
-		const existing = new WorkspaceLeaf();
-		app.workspace.leavesByType.set(VIEW_TYPE, [existing]);
+		const list = new WorkspaceLeaf();
+		app.workspace.leavesByType.set(LIST_TYPE, [list]);
 
-		await plugin.openCalendar();
+		await plugin.openList();
 
+		expect(app.workspace.activeLeaf).toBe(list);
 		expect(app.workspace.getLeafCalls).toHaveLength(0);
-		expect(app.workspace.activeLeaf).toBe(existing);
-		expect(existing.viewState).toBeNull();
+		expect(list.viewState).toBeNull();
 	});
 });
 
-describe('жизненный цикл view', () => {
+describe('отдельный календарь', () => {
+	it('вкладка, вернувшаяся с раскладкой, закрывается при любом свитче, список остаётся', async () => {
+		for (const settings of [null, { calendarInList: true }]) {
+			const { app, plugin } = createPlugin(settings);
+			await plugin.onload();
+			const restored = new WorkspaceLeaf();
+			const list = new WorkspaceLeaf();
+			app.workspace.leavesByType.set(VIEW_TYPE, [restored]);
+			app.workspace.leavesByType.set(LIST_TYPE, [list]);
+
+			app.workspace.triggerLayoutReady();
+
+			expect(restored.detached).toBe(true);
+			expect(list.detached).toBe(false);
+		}
+	});
+
+	it('команда открывает список, правая панель не трогается', async () => {
+		const { app, plugin, mock } = createPlugin(null);
+		await plugin.onload();
+
+		await mock.commands[0].callback?.();
+		await flushPromises();
+
+		expect(app.workspace.getRightLeafCalls).toHaveLength(0);
+		expect(app.workspace.leaves[0].viewState).toEqual({ type: LIST_TYPE, active: true });
+	});
+});
+
+describe.each([
+	['календарь', VIEW_TYPE, '.task__calendar-container'],
+	['список', LIST_TYPE, '.task__calendar-list'],
+])('жизненный цикл: %s', (_name, type, root) => {
 	const createView = async () => {
 		const { app, plugin, mock } = createPlugin(null);
 		await plugin.onload();
-		const factory = mock.registeredViews.get(VIEW_TYPE);
+		const factory = mock.registeredViews.get(type);
 		const view = factory?.(new WorkspaceLeaf()) as {
 			containerEl: HTMLElement;
 			onOpen(): Promise<void>;
@@ -194,7 +265,7 @@ describe('жизненный цикл view', () => {
 		return { app, view };
 	};
 
-	it('монтирует календарь в тело view и чистит его при закрытии', async () => {
+	it('монтируется в тело вида и чистит его при закрытии', async () => {
 		const { view } = await createView();
 		const body = view.containerEl.children[1];
 		const leftover = document.createElement('div');
@@ -204,15 +275,15 @@ describe('жизненный цикл view', () => {
 		await view.onOpen();
 		await flushPromises();
 
-		expect(body.querySelector('.task__calendar-container')).not.toBeNull();
+		expect(body.querySelector(root)).not.toBeNull();
 		expect(body.querySelector('.мусор-от-прошлого-view')).toBeNull();
 
 		await view.onClose();
 
-		expect(body.querySelector('.task__calendar-container')).toBeNull();
+		expect(body.querySelector(root)).toBeNull();
 	});
 
-	it('повторное открытие не оставляет второй календарь', async () => {
+	it('повторное открытие не оставляет второй экземпляр', async () => {
 		const { view } = await createView();
 		const body = view.containerEl.children[1];
 
@@ -222,10 +293,10 @@ describe('жизненный цикл view', () => {
 		await view.onOpen();
 		await flushPromises();
 
-		expect(body.querySelectorAll('.task__calendar-container')).toHaveLength(1);
+		expect(body.querySelectorAll(root)).toHaveLength(1);
 	});
 
-	it('закрытие вкладки подписки карты не снимает', async () => {
+	it('закрытие вида подписки карты не снимает', async () => {
 		const { app, view } = await createView();
 
 		app.workspace.triggerLayoutReady();
@@ -235,8 +306,8 @@ describe('жизненный цикл view', () => {
 		await flushPromises();
 		await view.onClose();
 
-		// Карта живёт в плагине: автоматика чекбокса должна работать и при
-		// закрытом календаре - галку ставят и руками в заметке.
+		// Карта живёт в плагине: автоматика должна работать и при закрытом виде -
+		// галку ставят и руками в панели свойств.
 		expect(app.vault.handlerCount('modify')).toBe(1);
 	});
 
@@ -253,8 +324,8 @@ describe('жизненный цикл view', () => {
 
 describe('карта задач', () => {
 	const withTasks = () => new Vault({
-		'Задачи/дело.md': taskFileText({ date: TODAY }),
-		'Другое/чужое.md': taskFileText({ date: TODAY }),
+		'Задачи/дело.md': taskFileText({ text: 'Дело' }),
+		'Другое/чужое.md': taskFileText({ text: 'Чужое' }),
 	});
 
 	it('до готовности интерфейса хранилище не читается', async () => {
@@ -273,12 +344,49 @@ describe('карта задач', () => {
 		app.workspace.triggerLayoutReady();
 		await flushPromises();
 
-		expect(plugin.taskMap.all().map((task) => task.key).sort())
-			.toEqual(['/Другое/чужое.md#0', '/Задачи/дело.md#0']);
+		expect(plugin.taskMap.all().map((task) => task.path).sort())
+			.toEqual(['Другое/чужое.md', 'Задачи/дело.md']);
 		expect(app.vault.handlerCount('modify')).toBe(1);
 		expect(app.vault.handlerCount('create')).toBe(1);
 		expect(app.vault.handlerCount('delete')).toBe(1);
 		expect(app.vault.handlerCount('rename')).toBe(1);
+	});
+
+	it('onLayoutReady назначает типы свойств: «Дата и время» - датой со временем, даты - датой, галочка - флажком', async () => {
+		const { app, plugin } = createPlugin(null, withTasks());
+		await plugin.onload();
+
+		app.workspace.triggerLayoutReady();
+		await flushPromises();
+
+		expect(app.metadataTypeManager?.setTypeCalls).toEqual([
+			['Выполнено', 'checkbox'],
+			['Дата и время', 'datetime'],
+			['Дата выполнения', 'date'],
+			['Дата переноса', 'date'],
+		]);
+	});
+
+	it('уже верный тип не перезаписывается, неверный исправляется', async () => {
+		const { app, plugin } = createPlugin(null);
+		const manager = app.metadataTypeManager!;
+		manager.assignedWidgets['дата и время'] = { name: 'Дата и время', widget: 'datetime' };
+		manager.assignedWidgets['выполнено'] = { name: 'Выполнено', widget: 'checkbox' };
+		manager.assignedWidgets['дата переноса'] = { name: 'Дата переноса', widget: 'text' };
+
+		await plugin.assignPropertyTypes();
+
+		expect(manager.setTypeCalls).toEqual([
+			['Дата выполнения', 'date'],
+			['Дата переноса', 'date'],
+		]);
+	});
+
+	it('без реестра типов плагин работает дальше', async () => {
+		const { app, plugin } = createPlugin(null);
+		app.metadataTypeManager = undefined;
+
+		await expect(plugin.assignPropertyTypes()).resolves.toBeUndefined();
 	});
 
 	it('индексация ничего не пишет в хранилище', async () => {
@@ -298,10 +406,13 @@ describe('карта задач', () => {
 		app.workspace.triggerLayoutReady();
 		await flushPromises();
 
+		expect(app.metadataCache.handlerCount('changed')).toBe(1);
+
 		plugin.onunload();
 
 		expect(app.vault.handlerCount('modify')).toBe(0);
 		expect(app.vault.handlerCount('rename')).toBe(0);
+		expect(app.metadataCache.handlerCount('changed')).toBe(0);
 	});
 
 	it('смена папки в настройках карту не пересобирает', async () => {
@@ -333,7 +444,7 @@ describe('вкладка настроек', () => {
 	it('показывает текущую папку для новых задач', async () => {
 		const { tab } = await openTab();
 
-		expect(Setting.instances).toHaveLength(1);
+		expect(Setting.instances).toHaveLength(2);
 		expect(Setting.instances[0].name).toBe('Папка для новых задач');
 		expect(Setting.instances[0].desc).toContain('по всему хранилищу');
 		expect(Setting.instances[0].textComponents[0].getValue()).toBe('/');
@@ -350,12 +461,31 @@ describe('вкладка настроек', () => {
 			.toEqual({ ...DEFAULT_SETTINGS, tasksFolderPath: 'Задачи/Личные' });
 	});
 
+	it('свитч «Календарь в списке»: выключен, переключение сохраняется и доходит до подписчиков', async () => {
+		const { plugin } = await openTab();
+		const setting = Setting.instances[1];
+		const listener = vi.fn(() => plugin.settings.calendarInList);
+		plugin.onSettingsChange(listener);
+
+		expect(setting.name).toBe('Календарь в списке');
+		expect(setting.desc).toContain('задачи этого дня');
+		expect(setting.desc).toContain('100 ближайших невыполненных задач');
+		expect(setting.toggleComponents[0].getValue()).toBe(false);
+
+		await setting.toggleComponents[0].toggle();
+
+		expect(plugin.settings.calendarInList).toBe(true);
+		expect((plugin as unknown as { savedData: unknown }).savedData)
+			.toEqual({ ...DEFAULT_SETTINGS, calendarInList: true });
+		expect(listener).toHaveReturnedWith(true);
+	});
+
 	it('перерисовка не дублирует контролы', async () => {
 		const { tab } = await openTab();
 
 		tab.display();
 
-		expect(Setting.instances).toHaveLength(2);
-		expect(Setting.instances[1].containerEl).toBe(tab.containerEl);
+		expect(Setting.instances).toHaveLength(4);
+		expect(Setting.instances[2].containerEl).toBe(tab.containerEl);
 	});
 });

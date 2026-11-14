@@ -250,37 +250,65 @@ export class Vault {
 }
 
 /**
- * Разбор блока свойств заметки: подмножество YAML, которого хватает формату
- * задач. Поддержаны `ключ: значение`, пустой `ключ:` и списки из `  - элемент`.
- * Значения остаются строками - как их отдаёт Obsidian для свойств-дат.
+ * Скаляр YAML: `true`/`false` - булевы, пусто - null, строка в двойных кавычках -
+ * JSON, в одинарных - как есть. Остальное - строка, и даты тоже: так их отдаёт
+ * Obsidian для свойств-дат.
  */
-export const parseFrontmatter = (content: string): Record<string, unknown> | null => {
-	const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-	if (!match) return null;
+const parseScalar = (raw: string): unknown => {
+	const value = raw.trim();
+	if (value === '' || value === 'null' || value === '~') return null;
+	if (value === 'true' || value === 'false') return value === 'true';
+	if (value.startsWith('"')) return JSON.parse(value);
+	if (value.startsWith('\'')) return value.slice(1, -1).replace(/''/g, '\'');
 
+	return value;
+};
+
+/**
+ * Разбор YAML блока свойств: подмножество, которого хватает формату задач.
+ * Поддержаны `ключ: значение`, пустой `ключ:` и списки из `  - элемент`. Строка,
+ * которая не похожа на `ключ: значение`, - ошибка разбора, как в настоящем YAML.
+ */
+export const parseYaml = (text: string): Record<string, unknown> | null => {
 	const frontmatter: Record<string, unknown> = {};
 	let lastKey: string | null = null;
 
-	for (const line of match[1].split(/\r?\n/)) {
+	for (const line of text.split(/\r?\n/)) {
+		if (line.trim() === '') continue;
+
 		const listItem = line.match(/^\s+-\s+(.*)$/);
 
 		if (listItem && lastKey) {
 			const list = Array.isArray(frontmatter[lastKey]) ? frontmatter[lastKey] as unknown[] : [];
-			list.push(listItem[1].trim());
+			list.push(parseScalar(listItem[1]));
 			frontmatter[lastKey] = list;
 			continue;
 		}
 
-		const pair = line.match(/^([^\s:][^:]*):\s*(.*)$/);
+		const pair = line.match(/^([^\s:][^:]*):(?:\s+(.*))?$/);
+		if (!pair) throw new Error(`YAML: не разобралась строка «${line}»`);
 
-		if (pair) {
-			const [, key, value] = pair;
-			lastKey = key.trim();
-			frontmatter[lastKey] = value.trim() === '' ? null : value.trim();
-		}
+		lastKey = pair[1].trim();
+		frontmatter[lastKey] = parseScalar(pair[2] ?? '');
 	}
 
-	return frontmatter;
+	return Object.keys(frontmatter).length > 0 ? frontmatter : null;
+};
+
+/** Блок свойств заметки - как его видит metadataCache. */
+export const parseFrontmatter = (content: string): Record<string, unknown> | null => {
+	const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+
+	return match ? parseYaml(match[1]) ?? {} : null;
+};
+
+/** Скаляр в YAML: строку, которую иначе прочитали бы не так, - в кавычки. */
+const stringifyScalar = (value: unknown): string => {
+	if (typeof value !== 'string') return String(value);
+
+	return /^[\s\-?:,[\]{}#&*!|>'"%@`]|: | #|^(?:true|false|null|~)$/.test(value)
+		? JSON.stringify(value)
+		: value;
 };
 
 /** Собрать блок свойств обратно в текст. Обратная операция к parseFrontmatter. */
@@ -290,11 +318,11 @@ export const stringifyFrontmatter = (frontmatter: Record<string, unknown>): stri
 	for (const [key, value] of Object.entries(frontmatter)) {
 		if (Array.isArray(value)) {
 			lines.push(`${key}:`);
-			for (const item of value) lines.push(`  - ${String(item)}`);
+			for (const item of value) lines.push(`  - ${stringifyScalar(item)}`);
 			continue;
 		}
 
-		lines.push(value === null || value === undefined ? `${key}:` : `${key}: ${String(value)}`);
+		lines.push(value === null || value === undefined ? `${key}:` : `${key}: ${stringifyScalar(value)}`);
 	}
 
 	lines.push('---');
@@ -312,6 +340,8 @@ export interface CachedMetadata {
  */
 export class FileManager {
 	readonly calls: { path: string; frontmatter: Record<string, unknown> }[] = [];
+	/** Подставная ошибка записи свойств. */
+	fails = false;
 
 	constructor(private vault: Vault) {}
 
@@ -319,6 +349,8 @@ export class FileManager {
 		file: TFile,
 		fn: (frontmatter: Record<string, unknown>) => void
 	): Promise<void> {
+		if (this.fails) throw new Error(`processFrontMatter failed: ${file.path}`);
+
 		const content = this.vault.contentOf(file.path);
 		if (content === undefined) throw new Error(`ENOENT: ${file.path}`);
 
@@ -328,7 +360,7 @@ export class FileManager {
 		const body = content.replace(/^---\r?\n[\s\S]*?\r?\n---/, '');
 		this.calls.push({ path: file.path, frontmatter: { ...frontmatter } });
 
-		await this.vault.modify(file, stringifyFrontmatter(frontmatter) + body);
+		await this.vault.modify(file, stringifyFrontmatter(frontmatter) + (body.startsWith('\n') ? body : `\n${body}`));
 	}
 }
 
@@ -336,18 +368,34 @@ export class MetadataCache {
 	private handlers = new Map<string, Set<VaultHandler>>();
 
 	readonly calls = { getFileCache: 0 };
+	/** Пути, которых в кэше ещё нет: getFileCache отдаёт null, как настоящий. */
+	readonly uncached = new Set<string>();
+	/**
+	 * Устаревшие свойства по пути: кэш ещё не догнал файл (правка пришла, пока
+	 * Obsidian был закрыт). Пока путь здесь, getFileCache отдаёт их.
+	 */
+	readonly stale = new Map<string, Record<string, unknown>>();
 
 	constructor(private vault: Vault | null = null) {}
 
 	getFileCache(file: TFile): CachedMetadata | null {
 		this.calls.getFileCache++;
+		if (this.uncached.has(file.path)) return null;
+
+		const stale = this.stale.get(file.path);
+		if (stale) return { frontmatter: stale };
 
 		const content = this.vault?.contentOf(file.path);
 		if (content === undefined) return null;
 
-		const frontmatter = parseFrontmatter(content);
+		// Битый YAML настоящий кэш не роняет: у файла просто нет свойств.
+		try {
+			const frontmatter = parseFrontmatter(content);
 
-		return frontmatter ? { frontmatter } : {};
+			return frontmatter ? { frontmatter } : {};
+		} catch {
+			return {};
+		}
 	}
 
 	on(event: string, handler: VaultHandler): EventRef {
@@ -604,10 +652,29 @@ export const Platform = {
 	isDesktop: true,
 };
 
+/**
+ * Реестр типов свойств - не публичный API, повторяет Obsidian 1.15.1: имена
+ * сравниваются без регистра, `setType` сохраняет `types.json`.
+ */
+export class MetadataTypeManager {
+	assignedWidgets: Record<string, { name: string; widget: string }> = {};
+	readonly setTypeCalls: [string, string][] = [];
+
+	getAssignedWidget(name: string): string | null {
+		return this.assignedWidgets[name.toLowerCase()]?.widget ?? null;
+	}
+
+	async setType(name: string, widget: string): Promise<void> {
+		this.setTypeCalls.push([name, widget]);
+		this.assignedWidgets[name.toLowerCase()] = { name, widget };
+	}
+}
+
 export class App {
 	vault: Vault;
 	metadataCache: MetadataCache;
 	fileManager: FileManager;
+	metadataTypeManager: MetadataTypeManager | undefined = new MetadataTypeManager();
 	workspace = new Workspace();
 
 	constructor(vault: Vault = new Vault()) {

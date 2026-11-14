@@ -1,99 +1,33 @@
 import { Notice, TAbstractFile, TFile, TFolder, debounce, moment } from 'obsidian';
 import type TaskCalendarPlugin from './TaskCalendarPlugin';
 import {
-	allChecked,
-	appendTaskBlock,
-	applyEdits,
-	blockChain,
-	blockDate,
-	blockShow,
-	blockAppendAt,
-	blockShape,
-	isValidBlock,
+	automate,
 	buildTaskFile,
 	DATE_FORMAT,
-	Edit,
-	nextFreeDate,
-	normalizeDate,
-	occurrenceBlockLines,
-	movedBlockLines,
-	clearSubtasksEdits,
-	ParsedBlock,
-	parseBlocks,
-	yearFileName,
-	parseRepeat,
-	readTasks,
-	removeParamEdit,
-	repeatBlockLines,
-	setParamEdit,
-	showDate,
+	DATE_TIME_FORMAT,
+	Frontmatter,
+	frontmatterOf,
+	NewTask,
+	PROPS,
+	readTask,
+	readTaskFile,
+	stateOf,
+	subtaskCheckedKey,
 	Task,
-	taskLineEdit,
-	taskVaultPath,
-	toggleCheckboxEdit,
-	unchecked,
-	withParam,
-	withoutParam,
+	taskFileName,
+	TaskState,
 } from './taskFormat';
 
 /**
  * Карта задач - производный индекс над файлами, с API на запись.
  *
  * Источник истины всегда файл: события хранилища обновляют карту, а запись через
- * API карты правит файл (`vault.process`). Хранилище на запись при старте не
- * сканируется - индексация только читает.
+ * API карты правит свойства файла (`processFrontMatter`). Хранилище на запись при
+ * старте не сканируется - индексация только читает.
  *
- * Карта живёт в плагине, а не в календаре: автоматика чекбокса должна срабатывать
- * и когда вкладка календаря закрыта, а галку поставили руками в заметке.
+ * Карта живёт в плагине, а не в виде: автоматика должна срабатывать и когда
+ * список закрыт, а галку поставили руками в панели свойств.
  */
-
-/** Состояние блока с прошлой индексации - по нему узнаётся переключение. */
-interface BlockState {
-	/**
-	 * Отпечаток блока без галочек. Номер блока сам по себе ненадёжен: вставили
-	 * блок выше - и все номера съехали. Отпечаток отличает «тот же блок,
-	 * переключили чекбокс» от «на этот номер попал другой блок».
-	 */
-	shape: string;
-	checked: boolean;
-}
-
-/**
- * Где блок задачи стоит в файле: строка с нуля и позиция в ней. Форма та же, что
- * у `startLoc`/`endLoc`, по которым Obsidian подсвечивает цель ссылки
- * `[[Заметка#Заголовок]]`.
- */
-export interface BlockRange {
-	start: { line: number; col: number };
-	end: { line: number; col: number };
-}
-
-/**
- * Дни, у которых в файле уже есть свой блок. Череда их перескакивает: такой день
- * держит свой блок, и второй на нём дал бы вторую карточку.
- *
- * Занятыми считаются оба дня перенесённого блока: 📅 - день череды, с которого он
- * уехал, ↔️ - день, на котором он теперь показывается. Череда не должна вернуться
- * ни туда, ни туда.
- *
- * Считаются только блоки своей цепочки (`chain`): в месячном файле рядом лежат
- * чужие задачи, и их дни череде не помеха.
- */
-const takenDays = (lines: string[], blocks: ParsedBlock[], chain: string): Set<string> => {
-	const days = new Set<string>();
-
-	for (const block of blocks) {
-		if (blockChain(lines, block) !== chain) continue;
-
-		const own = blockDate(block);
-		if (own) days.add(own);
-
-		const show = blockShow(block);
-		if (show) days.add(show);
-	}
-
-	return days;
-};
 
 /** Дешёвый хэш содержимого: защита от цикла «запись -> событие -> запись». */
 const hashOf = (text: string): string => {
@@ -104,17 +38,23 @@ const hashOf = (text: string): string => {
 	return `${text.length}:${hash}`;
 };
 
-/** Сколько файлов читаем одновременно при полном скане. */
+/** Сколько файлов без кэша метаданных читаем одновременно при полном скане. */
 const SCAN_CHUNK = 20;
+
+const today = (): string => moment().format(DATE_FORMAT);
 
 export class TaskMap {
 	private readonly plugin: TaskCalendarPlugin;
 
 	/** Задачи по пути файла. */
-	private tasksByPath = new Map<string, Task[]>();
-	/** Состояния блоков по пути файла и номеру блока. */
-	private states = new Map<string, Map<number, BlockState>>();
-	/** Хэш содержимого по пути: то же содержимое - переиндексировать нечего. */
+	private tasks = new Map<string, Task>();
+	/** Состояния задач с прошлой индексации: по ним узнаётся переход. */
+	private states = new Map<string, TaskState>();
+	/**
+	 * Хэш содержимого по пути: то же содержимое - переиндексировать нечего. Есть
+	 * только у прочитанных файлов: задача, взятая при старте из кэша метаданных,
+	 * хэша не имеет до первого события.
+	 */
 	private hashes = new Map<string, string>();
 	/** Плоский список задач. Пересобирается лениво, а не на каждое событие. */
 	private snapshot: Task[] | null = null;
@@ -140,51 +80,13 @@ export class TaskMap {
 
 	/** Все задачи хранилища. Порядок произвольный - сортирует потребитель. */
 	all(): Task[] {
-		if (!this.snapshot) {
-			const tasks: Task[] = [];
-			for (const list of this.tasksByPath.values()) tasks.push(...list);
-			this.snapshot = tasks;
-		}
+		if (!this.snapshot) this.snapshot = [...this.tasks.values()];
 
 		return this.snapshot;
 	}
 
-	byKey(key: string): Task | null {
-		return this.all().find((task) => task.key === key) ?? null;
-	}
-
-	/**
-	 * Где блок задачи стоит в файле сейчас: от строки задачи до последней строки
-	 * тела. Нужно для подсветки при переходе в файл.
-	 *
-	 * Файл читается заново: номеров строк в карте нет, тело там уже без отступов.
-	 * Нет файла или блока - null, и переход откроет файл без подсветки.
-	 */
-	async locate(key: string): Promise<BlockRange | null> {
-		const task = this.byKey(key);
-		if (!task) return null;
-
-		const file = this.fileOf(taskVaultPath(task));
-		if (!file) return null;
-
-		let content: string;
-
-		try {
-			content = await this.plugin.app.vault.cachedRead(file);
-		} catch (error) {
-			console.error(`${file.path}:`, error);
-
-			return null;
-		}
-
-		const lines = content.split('\n');
-		const block = parseBlocks(lines).find((item) => item.index === task.blockIndex);
-		if (!block) return null;
-
-		return {
-			start: { line: block.start, col: 0 },
-			end: { line: block.end, col: lines[block.end].length },
-		};
+	byPath(path: string): Task | null {
+		return this.tasks.get(path) ?? null;
 	}
 
 	/** Подписки на хранилище и первичная индексация. */
@@ -192,12 +94,13 @@ export class TaskMap {
 		if (this.started) return;
 		this.started = true;
 
-		const { vault } = this.plugin.app;
+		const { vault, metadataCache } = this.plugin.app;
 
 		vault.on('create', this.handleUpsert);
 		vault.on('modify', this.handleUpsert);
 		vault.on('delete', this.handleDelete);
 		vault.on('rename', this.handleRename);
+		metadataCache.on('changed', this.handleMetadata);
 
 		await this.refresh();
 	}
@@ -206,36 +109,63 @@ export class TaskMap {
 		if (!this.started) return;
 		this.started = false;
 
-		const { vault } = this.plugin.app;
+		const { vault, metadataCache } = this.plugin.app;
 
 		this.schedule.cancel();
 		vault.off('create', this.handleUpsert);
 		vault.off('modify', this.handleUpsert);
 		vault.off('delete', this.handleDelete);
 		vault.off('rename', this.handleRename);
+		metadataCache.off('changed', this.handleMetadata);
 	}
 
 	/**
 	 * Полный пересбор при старте плагина. Сканируется всё хранилище: задачей файл
-	 * делает валидный блок внутри, а не папка, в которой он лежит.
+	 * делают свойства, а не папка, в которой он лежит.
+	 *
+	 * Файлы при этом не читаются (оптимизация 14.11.2026: 4600 заметок рабочего
+	 * хранилища читались с диска при каждом запуске). Свойства берутся из кэша
+	 * метаданных Obsidian - он у Obsidian уже есть и переживает перезапуск;
+	 * заметка без «Задача» в нём пропускается сразу. С диска читаются только
+	 * файлы, которых в кэше ещё нет.
 	 */
 	async refresh(): Promise<void> {
-		this.tasksByPath.clear();
+		this.tasks.clear();
 		this.states.clear();
 		this.hashes.clear();
 		this.snapshot = null;
 		this.touched.clear();
 		this.dropped.clear();
 
-		const files = this.plugin.app.vault.getMarkdownFiles();
+		const { vault, metadataCache } = this.plugin.app;
+		const uncached: TFile[] = [];
+
+		for (const file of vault.getMarkdownFiles()) {
+			const cache = metadataCache.getFileCache(file);
+
+			if (cache) this.storeCached(file.path, cache.frontmatter);
+			else uncached.push(file);
+		}
 
 		// Группами, а не по одной и не все разом: последовательное чтение тысячи
 		// заметок растягивается, а одновременное упирается в диск.
-		for (let i = 0; i < files.length; i += SCAN_CHUNK) {
-			await Promise.all(files.slice(i, i + SCAN_CHUNK).map((file) => this.indexFile(file)));
+		for (let i = 0; i < uncached.length; i += SCAN_CHUNK) {
+			await Promise.all(uncached.slice(i, i + SCAN_CHUNK).map((file) => this.indexFile(file)));
 		}
 
 		this.notify();
+	}
+
+	/**
+	 * Задача из свойств кэша метаданных - без чтения файла и без хэша. Объект
+	 * свойств принадлежит Obsidian: `readTask` его только читает.
+	 */
+	private storeCached(path: string, frontmatter: unknown): void {
+		const task = readTask(path, frontmatter);
+		if (!task) return;
+
+		this.tasks.set(path, task);
+		this.states.set(path, stateOf(task));
 	}
 
 	/**
@@ -272,7 +202,7 @@ export class TaskMap {
 	};
 
 	private handleDelete = (file: TAbstractFile): void => {
-		if (!this.matters(file) && !this.tasksByPath.has(file.path)) return;
+		if (!this.matters(file) && !this.hashes.has(file.path)) return;
 
 		this.dropped.add(file.path);
 		this.schedule();
@@ -280,7 +210,7 @@ export class TaskMap {
 
 	/**
 	 * Перемещение в Obsidian - это тоже rename, и обработчику приходит **старый
-	 * путь**: без него переехавшая задача висела бы в календаре дважды - по старому
+	 * путь**: без него переехавшая задача висела бы в списке дважды - по старому
 	 * пути и по новому. Переехать может и папка целиком - тогда разбирать придётся
 	 * всё, что внутри.
 	 */
@@ -290,6 +220,23 @@ export class TaskMap {
 		if (oldPath !== undefined) this.dropped.add(oldPath);
 		if (this.matters(file)) this.touched.add(file.path);
 
+		this.schedule();
+	};
+
+	/**
+	 * Obsidian перечитал свойства файла. Правку могли сделать мимо событий
+	 * хранилища - пришла синхронизация, пока Obsidian был закрыт, а при старте
+	 * кэш ещё был прежним. Разбираем только задачи и файлы, которые ими были:
+	 * обычные заметки не читаем.
+	 */
+	private handleMetadata = (file: TFile): void => {
+		if (!this.isNote(file.path)) return;
+
+		const frontmatter = this.plugin.app.metadataCache.getFileCache(file)?.frontmatter;
+		const isTask = !!frontmatter && PROPS.text in frontmatter;
+		if (!isTask && !this.tasks.has(file.path)) return;
+
+		this.touched.add(file.path);
 		this.schedule();
 	};
 
@@ -343,12 +290,15 @@ export class TaskMap {
 		return changed;
 	}
 
-	/** Забыть путь вместе со всем, что под ним: удалить могли и папку целиком. */
+	/**
+	 * Забыть путь вместе со всем, что под ним: удалить могли и папку целиком.
+	 * Смотрим и задачи, и хэши: у задачи из кэша метаданных хэша нет.
+	 */
 	private forgetTree(path: string): boolean {
 		let changed = this.forget(path);
 		const prefix = `${path}/`;
 
-		for (const known of [...this.tasksByPath.keys()]) {
+		for (const known of new Set([...this.tasks.keys(), ...this.hashes.keys()])) {
 			if (known.startsWith(prefix) && this.forget(known)) changed = true;
 		}
 
@@ -356,7 +306,7 @@ export class TaskMap {
 	}
 
 	private forget(path: string): boolean {
-		const known = this.tasksByPath.delete(path);
+		const known = this.tasks.delete(path);
 		this.states.delete(path);
 		this.hashes.delete(path);
 
@@ -369,370 +319,153 @@ export class TaskMap {
 		return file instanceof TFile ? file : null;
 	}
 
-	/** Прочитать файл и свести карту с его содержимым. */
-	private async indexFile(file: TFile): Promise<boolean> {
-		let content: string;
-
+	private async read(file: TFile): Promise<string | null> {
 		try {
-			content = await this.plugin.app.vault.cachedRead(file);
+			return await this.plugin.app.vault.cachedRead(file);
 		} catch (error) {
 			console.error(`${file.path}:`, error);
 
-			return false;
+			return null;
 		}
+	}
 
-		return this.syncContent(file, content);
+	/** Прочитать файл и свести карту с его содержимым. */
+	private async indexFile(file: TFile): Promise<boolean> {
+		const content = await this.read(file);
+
+		return content === null ? false : this.syncContent(file, content);
 	}
 
 	/**
-	 * Свести карту с содержимым файла и, если чекбоксы переключили, применить
-	 * автоматику раздела 5 - одной записью.
-	 *
-	 * Единственная точка входа: и события хранилища, и собственная запись карты
-	 * приходят сюда, поэтому триггер один и тот же, откуда бы галку ни поставили.
+	 * Свести карту с содержимым файла и, если в свойствах случился переход,
+	 * применить автоматику - одной записью.
 	 *
 	 * Цикла нет: после записи запоминается хэш результата, и `modify` от своей же
 	 * записи упирается в него и уходит ни с чем.
+	 *
+	 * Состояния у задачи нет - значит, её видят впервые: правки, сделанные при
+	 * выключенном плагине, не догоняются, файл не правится.
 	 */
 	private async syncContent(file: TFile, content: string): Promise<boolean> {
 		if (this.hashes.get(file.path) === hashOf(content)) return false;
 
-		const edits = this.automationEdits(file.path, content);
-		let written = content;
+		const previous = this.states.get(file.path);
+		const frontmatter = frontmatterOf(content);
 
-		if (edits.length > 0) {
-			written = await this.write(file, content, applyEdits(content.split('\n'), edits).join('\n'));
+		// Пробуем автоматику на копии: писать стоит, только если что-то меняется.
+		if (previous && frontmatter && automate({ ...frontmatter }, previous, today()).changed) {
+			await this.writeTask(file, previous, () => true);
+
+			return true;
 		}
 
-		this.store(file.path, written);
+		this.store(file.path, content);
 
 		return true;
 	}
 
 	/**
-	 * Что автоматика делает с файлом. Переход определяется сравнением состояния
-	 * чекбоксов блока до и после; предыдущее состояние лежит в индексе.
+	 * Записать свойства задачи: сначала правка `change`, затем автоматика - одной
+	 * записью. Файл следующего повтора создаётся после, рядом с исходным.
 	 *
-	 * | не все отмечены -> все | поставить ✅ сегодня; есть 🔁 - сгенерировать
-	 * |                        | следующий блок и убрать 🔁 из текущего |
-	 * | все -> не все          | убрать ✅ |
-	 * | остальное              | ничего, только обновить карту |
-	 *
-	 * Состояния у блока нет - значит, его видят впервые: отметки, сделанные при
-	 * выключенном плагине, не догоняются, файл не правится.
+	 * `change` вернул false - править нечего, и автоматика тоже не нужна.
 	 */
-	private automationEdits(path: string, content: string): Edit[] {
-		const known = this.states.get(path);
-		if (!known || known.size === 0) return [];
-
-		const lines = content.split('\n');
-		const blocks = parseBlocks(lines);
-		const edits: Edit[] = [];
-		const today = moment().format(DATE_FORMAT);
-
-		for (const block of blocks) {
-			// Невалидный блок автоматика не трогает: сняли из тела все чекбоксы -
-			// задача пропала с календаря, но её ✅ остаётся как написано.
-			if (!isValidBlock(lines, block)) continue;
-
-			const previous = known.get(block.index);
-			if (!previous || previous.shape !== blockShape(block)) continue;
-
-			const checked = allChecked(lines, block);
-			if (checked === previous.checked) continue;
-
-			if (!checked) {
-				const remove = removeParamEdit(lines, block, 'done');
-				if (remove) edits.push(remove);
-				continue;
-			}
-
-			const repeat = parseRepeat(block.params.repeat?.value);
-			const base = blockDate(block);
-			// Дни, у которых уже есть свой блок этой цепочки: череда их перескакивает.
-			const next = repeat && base
-				? nextFreeDate(base, repeat, takenDays(lines, blocks, blockChain(lines, block)))
-				: null;
-
-			// ✅ и снятие 🔁 - одна правка: оба стоят в строке задачи.
-			edits.push(taskLineEdit(lines, block, (line) => {
-				const done = withParam(line, 'done', today);
-
-				return next ? withoutParam(done, 'repeat') : done;
-			}));
-
-			// Повтора нет - задача просто закрылась.
-			if (!next) continue;
-
-			// Новый блок встаёт непосредственно над закрытым, 🔁 уходит из него: в
-			// цепочке остаётся ровно один блок с повтором.
-			//
-			// Над закрытым, а не в начало файла: уже лежащие блоки не двигаются.
-			// Лежали выполненные сверху - там и останутся, ничего не сортируем.
-			edits.push({
-				at: block.start,
-				remove: 0,
-				insert: repeatBlockLines(lines, block, next),
-			});
-		}
-
-		return edits;
-	}
-
-	/**
-	 * Записать файл. Содержимое сверяется с тем, что мы читали: успел измениться -
-	 * своё не навязываем, событие хранилища всё равно приведёт нас сюда снова.
-	 */
-	private async write(file: TFile, before: string, next: string): Promise<string> {
-		let written = next;
+	private async writeTask(
+		file: TFile,
+		previous: TaskState,
+		change: (frontmatter: Frontmatter, task: Task) => boolean
+	): Promise<void> {
+		// Через as: присваивание в замыкании TypeScript не видит и сузил бы до null.
+		let next = null as NewTask | null;
 
 		try {
-			await this.plugin.app.vault.process(file, (current) => {
-				if (current === before) return next;
+			await this.plugin.app.fileManager.processFrontMatter(file, (frontmatter: Frontmatter) => {
+				const task = readTask(file.path, frontmatter);
+				if (!task || !change(frontmatter, task)) return;
 
-				written = current;
-
-				return current;
+				next = automate(frontmatter, previous, today()).next;
 			});
 		} catch (error) {
 			console.error(`${file.path}:`, error);
-			new Notice('Не удалось записать задачу');
-			written = before;
-		}
-
-		return written;
-	}
-
-	/** Запомнить разбор файла: задачи, состояния блоков и хэш содержимого. */
-	private store(path: string, content: string): void {
-		const lines = content.split('\n');
-		const blocks = parseBlocks(lines);
-		const tasks = readTasks(path, content);
-		const states = new Map<number, BlockState>();
-
-		for (const task of tasks) {
-			const block = blocks.find((item) => item.index === task.blockIndex);
-			if (!block) continue;
-
-			states.set(task.blockIndex, {
-				shape: blockShape(block),
-				checked: task.checked,
-			});
-		}
-
-		this.tasksByPath.set(path, tasks);
-		this.states.set(path, states);
-		this.hashes.set(path, hashOf(content));
-		this.snapshot = null;
-	}
-
-	/**
-	 * Переключить чекбокс задачи. Номер - порядковый сверху вниз, ровно как их
-	 * отрисовал рендер карточки.
-	 *
-	 * `showOn` - день, с карточки которого пришла галочка. Совпадает с датой показа
-	 * блока - обычная отметка. Отличается - значит отметили **расчётный день
-	 * череды**: ему заводится свой блок (📅 этого дня, чистое тело, без 🔁) в конце
-	 * файла, и выполняется только он. Текущий блок остаётся как был, а когда череда дойдёт
-	 * до этого дня, она его перескочит - день уже занят своим блоком.
-	 *
-	 * Результат сводится в карту сразу, не дожидаясь события: галочку ставит текст
-	 * заметки, а не браузер, и до конца debounce карточка стояла бы в прежнем виде.
-	 */
-	async toggleCheckbox(key: string, index: number, showOn?: string): Promise<void> {
-		await this.edit(key, (content, blockIndex) => {
-			const lines = content.split('\n');
-			const blocks = parseBlocks(lines);
-			const block = blocks.find((item) => item.index === blockIndex);
-			if (!block) return null;
-
-			// Отметили расчётный день череды - заводим блок этого дня. Сравнение с
-			// днём показа: у перенесённого блока это ↔️, а не 📅.
-			if (showOn && normalizeDate(showOn) && showOn !== blockShow(block)) {
-				const fragment = this.occurrenceLines(lines, block, showOn, index);
-
-				return fragment
-					? applyEdits(lines, [{
-						at: blockAppendAt(blocks),
-						remove: 0,
-						insert: fragment,
-					}]).join('\n')
-					: null;
-			}
-
-			const toggle = toggleCheckboxEdit(lines, block, index);
-
-			return toggle ? applyEdits(lines, [toggle]).join('\n') : null;
-		});
-	}
-
-	/**
-	 * Строки блока отдельного дня череды с уже поставленной галочкой.
-	 *
-	 * Тело берётся у текущего блока со снятыми чекбоксами - это новый экземпляр
-	 * задачи, а не копия чужих отметок. ✅ ставится **здесь же**, если галочка
-	 * оказалась последней: блок только что появился, прошлого состояния у него в
-	 * индексе нет, и автоматика переключения на него не сработает.
-	 */
-	private occurrenceLines(
-		lines: string[],
-		block: ParsedBlock,
-		date: string,
-		index: number
-	): string[] | null {
-		const fragment = occurrenceBlockLines(lines, block, date);
-		const own = parseBlocks(fragment)[0];
-		if (!own) return null;
-
-		const toggle = toggleCheckboxEdit(fragment, own, index);
-		if (!toggle) return null;
-
-		const marked = applyEdits(fragment, [toggle]);
-		const day = parseBlocks(marked)[0];
-
-		return day && allChecked(marked, day)
-			? applyEdits(marked, [setParamEdit(marked, day, 'done', moment().format(DATE_FORMAT))])
-			: marked;
-	}
-
-	/**
-	 * Перенести задачу на другой день.
-	 *
-	 * Блок без 🔁 - один экземпляр. У обычного меняется 📅. У блока с ↔️ 📅 - его
-	 * день в череде, который она перескакивает, поэтому меняется только ↔️, а
-	 * вернули блок на его 📅 - ↔️ уходит.
-	 *
-	 * У блока цепочки перенос - это **вынести один экземпляр из череды**: в конец
-	 * файла встаёт отдельный блок без 🔁, в 📅 - уехавший день череды, в ↔️ - новый
-	 * (с 05.11.2026 - при любом переносе повторной задачи, решение пользователя).
-	 * Череда оба дня перескакивает - они заняты этим блоком.
-	 *
-	 * `from` - день карточки, с которой пришёл перенос. Совпадает с днём показа
-	 * блока - уезжает сам блок: экземпляр едет вместе с уже поставленными
-	 * галочками, а цепочка шагает на следующий свободный день. Отличается -
-	 * переносят **расчётный день череды** (правка от 03.11.2026): тело экземпляра
-	 * чистое, а цепочка остаётся на своём дне.
-	 */
-	async moveTask(key: string, date: string, from?: string): Promise<void> {
-		const task = this.byKey(key);
-		if (!task || !normalizeDate(date)) return;
-
-		// День карточки: у расчётного дня череды он свой, у обычной - день показа.
-		const day = normalizeDate(from) ?? showDate(task);
-		// Тот же день - писать нечего: vault.process тронул бы файл впустую.
-		if (day === date) return;
-
-		await this.edit(key, (content, blockIndex) => {
-			const lines = content.split('\n');
-			const blocks = parseBlocks(lines);
-			const block = blocks.find((item) => item.index === blockIndex);
-			if (!block) return null;
-
-			const own = blockDate(block);
-			const show = blockShow(block);
-			if (!own || !show) return null;
-
-			const repeat = parseRepeat(block.params.repeat?.value);
-
-			if (!repeat) {
-				if (show === date) return null;
-
-				const edit = taskLineEdit(lines, block, (line) => {
-					if (!block.params.move) return withParam(line, 'date', date);
-
-					return date === own ? withoutParam(line, 'move') : withParam(line, 'move', date);
-				});
-
-				return applyEdits(lines, [edit]).join('\n');
-			}
-
-			const taken = takenDays(lines, blocks, blockChain(lines, block));
-			taken.add(date);
-			taken.add(day);
-
-			// Уехавший день череды остаётся в 📅 экземпляра, новый встаёт в ↔️. Уехал
-			// день самого блока - экземпляр забирает отметки с собой. Уехал расчётный
-			// день - тело чистое: отмечать там было нечего.
-			const itself = day === show;
-			const edits: Edit[] = [{
-				at: blockAppendAt(blocks),
-				remove: 0,
-				insert: movedBlockLines(lines, block, itself ? own : day, date, itself),
-			}];
-
-			// Расчётный день цепочку не двигает. Шагает она, только если экземпляр
-			// встал на её собственный день: два блока одной задачи на дне - две
-			// карточки.
-			if (!itself && date !== show) return applyEdits(lines, edits).join('\n');
-
-			// Свободного дня не нашлось - череду не двигаем, но экземпляр всё равно
-			// переносим: потерять его хуже, чем оставить цепочку на месте.
-			const next = nextFreeDate(own, repeat, taken);
-
-			if (next) {
-				// Новая 📅, без ↔️ - у цепочки снова свой день, - и чистое тело: это
-				// уже следующий экземпляр. Строка задачи - одной правкой.
-				edits.push(taskLineEdit(lines, block, (line) =>
-					unchecked(withoutParam(withParam(line, 'date', next), 'move'))));
-				edits.push(...clearSubtasksEdits(lines, block));
-			}
-
-			return applyEdits(lines, edits).join('\n');
-		});
-	}
-
-	/** Общая часть правок: найти файл, записать и свести карту с результатом. */
-	private async edit(
-		key: string,
-		change: (content: string, blockIndex: number) => string | null
-	): Promise<void> {
-		const task = this.byKey(key);
-		if (!task) return;
-
-		const path = taskVaultPath(task);
-		const file = this.fileOf(path);
-		if (!file) return;
-
-		let written: string | null = null;
-
-		try {
-			await this.plugin.app.vault.process(file, (current) => {
-				const next = change(current, task.blockIndex);
-				if (next === null || next === current) return current;
-
-				written = next;
-
-				return next;
-			});
-		} catch (error) {
-			console.error(`${path}:`, error);
 			new Notice('Не удалось записать задачу');
 
 			return;
 		}
 
-		if (written === null) return;
+		const written = await this.read(file);
+		if (written !== null) this.store(file.path, written);
 
-		if (await this.syncContent(file, written)) this.notify();
+		// Следующий повтор - рядом с исходным, а не в папке из настроек: файл, который
+		// убрали в свою папку, там и продолжается (решение 13.11.2026).
+		if (next) await this.createFile(this.folderOf(file.path), next);
+	}
+
+	/** Папка файла по пути без слэшей по краям. */
+	private folderOf(path: string): string {
+		const at = path.lastIndexOf('/');
+
+		return at === -1 ? '' : path.slice(0, at);
+	}
+
+	/** Запомнить разбор файла: задачу, её состояние и хэш содержимого. */
+	private store(path: string, content: string): void {
+		const task = readTaskFile(path, content);
+
+		if (task) {
+			this.tasks.set(path, task);
+			this.states.set(path, stateOf(task));
+		} else {
+			this.tasks.delete(path);
+			this.states.delete(path);
+		}
+
+		this.hashes.set(path, hashOf(content));
+		this.snapshot = null;
 	}
 
 	/**
-	 * Создать задачу на дату в годовом файле: `YYYY.md` по 📅 задачи, в папке для
-	 * новых задач. Файла этого года нет - он создаётся, есть - задача дописывается
-	 * в него под всеми задачами. Блок - 📅 и один снятый чекбокс с
-	 * текстом из поля. Возвращает путь файла или null.
+	 * Переключить галочку в карточке: 0 - сама задача, дальше подзадачи по порядку.
+	 * Дальше та же автоматика, что при правке свойств руками.
 	 *
-	 * Имя файла дальше не меняется: переименование ломало бы ссылки `[[...]]` на
-	 * заметку, а дата и текст в карте и так берутся из содержимого блока.
+	 * Результат сводится в карту сразу, не дожидаясь события: галочку ставят
+	 * свойства файла, а не браузер, и до конца debounce карточка стояла бы в
+	 * прежнем виде.
 	 */
-	async createTask(date: string, text: string): Promise<string | null> {
-		// Строка задачи в файле одна: переносы из поля (вставили текст в несколько
-		// строк) становятся пробелами, иначе хвост задачи ушёл бы в чужой абзац.
-		const value = text.replace(/\s*[\r\n]+\s*/g, ' ').trim();
-		if (!value || !normalizeDate(date)) return null;
+	async toggle(path: string, index: number): Promise<void> {
+		const task = this.byPath(path);
+		const file = this.fileOf(path);
+		if (!task || !file || index < 0 || index > task.subtasks.length) return;
 
-		const { vault } = this.plugin.app;
+		const previous = this.states.get(path) ?? stateOf(task);
+
+		await this.writeTask(file, previous, (frontmatter, fresh) => {
+			if (index === 0) {
+				frontmatter[PROPS.checked] = !fresh.checked;
+
+				return true;
+			}
+
+			const subtask = fresh.subtasks[index - 1];
+			if (!subtask) return false;
+
+			frontmatter[subtaskCheckedKey(subtask.number)] = !subtask.checked;
+
+			return true;
+		});
+
+		this.notify();
+	}
+
+	/**
+	 * Новая задача - шаблон для ручного заполнения (просьба пользователя
+	 * 14.11.2026, вместо окна с полями): файл `ГГГГММДД_ЧЧММСС.md` в папке для
+	 * новых задач, `Дата и время` - текущие дата и время, те же, что в имени
+	 * файла, `Выполнено: false`, остальное пустое. Задачей файл станет, когда
+	 * заполнят `Задача`. Возвращает путь файла или null, если создать не вышло.
+	 */
+	async createBlankTask(): Promise<string | null> {
 		const folder = this.folder();
+		const now = moment();
 
 		try {
 			await this.ensureFolder(folder);
@@ -743,33 +476,39 @@ export class TaskMap {
 			return null;
 		}
 
-		const name = yearFileName(date);
-		const path = folder ? `${folder}/${name}.md` : `${name}.md`;
-		const existing = vault.getAbstractFileByPath(path);
+		return this.createFile(
+			folder,
+			{ text: '', dateTime: now.format(DATE_TIME_FORMAT), repeat: null, subtasks: [] },
+			now
+		);
+	}
+
+	/**
+	 * Файл задачи в папке. Имя - время создания; занято (две задачи в одну
+	 * секунду) - с суффиксом `_2`, `_3`.
+	 *
+	 * Карта сводится сразу: карточка должна появиться, не дожидаясь debounce.
+	 */
+	private async createFile(folder: string, task: NewTask, now = moment()): Promise<string | null> {
+		const { vault } = this.plugin.app;
+		const base = `${folder ? `${folder}/` : ''}${taskFileName(now)}`;
+		let path = `${base}.md`;
+
+		for (let n = 2; vault.getAbstractFileByPath(path); n++) path = `${base}_${n}.md`;
+
+		const content = buildTaskFile(task);
 
 		try {
-			// Индексируем сразу: карточка должна появиться, не дожидаясь debounce.
-			if (existing instanceof TFile) {
-				const written = await vault.process(
-					existing,
-					(current) => appendTaskBlock(current, date, value)
-				);
-
-				if (await this.syncContent(existing, written)) this.notify();
-			} else {
-				const file = await vault.create(path, buildTaskFile(date, value));
-
-				if (file instanceof TFile) {
-					await this.indexFile(file);
-					this.notify();
-				}
-			}
+			await vault.create(path, content);
 		} catch (error) {
 			console.error(`${path}:`, error);
 			new Notice('Не удалось создать задачу');
 
 			return null;
 		}
+
+		this.store(path, content);
+		this.notify();
 
 		return path;
 	}

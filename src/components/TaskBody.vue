@@ -21,6 +21,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, watch } from 'vue';
 import { App, Component, Keymap, MarkdownRenderer, Notice } from 'obsidian';
+import { HOVER_LINK_SOURCE } from '../types';
 
 /**
  * Тело задачи, отрисованное штатным markdown-рендером Obsidian: чекбоксы,
@@ -45,8 +46,6 @@ const CHECKBOX_SELECTOR = 'input.task-list-item-checkbox';
 /** Ссылка на заметку: и `[[вики]]`, и `[текст](Заметка.md)`. */
 const INTERNAL_LINK_SELECTOR = 'a.internal-link';
 const EXTERNAL_LINK_SELECTOR = 'a.external-link';
-/** Источник события hover-link - им же плагин представлен в «Предпросмотре». */
-const HOVER_SOURCE = 'task-calendar';
 
 /**
  * Куда ведёт ссылка. У внутренних настоящая цель лежит в data-href: в href
@@ -140,7 +139,7 @@ const handleMouseOver = (event: MouseEvent): void => {
 
 	props.app.workspace.trigger('hover-link', {
 		event,
-		source: HOVER_SOURCE,
+		source: HOVER_LINK_SOURCE,
 		hoverParent: { hoverPopover: null },
 		targetEl: link,
 		linktext: href,
