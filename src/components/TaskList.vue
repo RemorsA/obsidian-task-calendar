@@ -324,11 +324,14 @@ const sections = computed<Section[]>(() => {
 /**
  * Вид карточки: красная рамка у просроченной, свой вид у выполненной. По самой
  * задаче: в выбранном дне календаря выполненные идут вместе с открытыми.
+ * Невыполненная на сегодня - рамка активным цветом (просьба пользователя
+ * 15.11.2026).
  */
 const modifierOf = (task: Task): string => {
 	if (task.doneDate !== null) return '--is-done';
+	if (isOverdue(task, todayStr.value)) return '--is-overdue';
 
-	return isOverdue(task, todayStr.value) ? '--is-overdue' : '';
+	return showDate(task) === todayStr.value ? '--is-today' : '';
 };
 
 const checkbox = (checked: boolean): string => (checked ? '[x]' : '[ ]');

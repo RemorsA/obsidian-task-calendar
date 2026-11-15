@@ -106,7 +106,7 @@ describe('свитч включён: 100 ближайших невыполнен
 		});
 
 		expect(cardTexts(wrapper)).toEqual(['Перенесли вперёд', 'Сегодня', 'Перенесли назад']);
-		expect(modifiers(wrapper)).toEqual([['--is-overdue'], [], []]);
+		expect(modifiers(wrapper)).toEqual([['--is-overdue'], ['--is-today'], []]);
 	});
 
 	it('не больше 100 задач - ближайшие', async () => {
@@ -318,15 +318,24 @@ describe('карточка', () => {
 		expect(wrapper.find('.tasks__item-date').text()).toBe('Без даты');
 	});
 
-	it('просроченная отличается видом карточки', async () => {
+	it('просроченная и сегодняшняя отличаются видом карточки, будущая - нет', async () => {
 		const { wrapper } = await mountOpenList({
 			files: {
 				'1.md': taskFileText({ date: '2026-08-01' }),
-				'3.md': taskFileText({ date: TODAY }),
+				'2.md': taskFileText({ date: `${TODAY}T21:00:00` }),
+				'3.md': taskFileText({ date: '2026-08-14' }),
 			},
 		});
 
-		expect(modifiers(wrapper)).toEqual([['--is-overdue'], []]);
+		expect(modifiers(wrapper)).toEqual([['--is-overdue'], ['--is-today'], []]);
+	});
+
+	it('выполненная сегодня - вид выполненной, без рамки сегодняшней', async () => {
+		const { wrapper } = await mountOpenList({
+			files: { '1.md': taskFileText({ date: TODAY, checked: true, doneDate: `${TODAY}T10:00:00` }) },
+		});
+
+		expect(modifiers(wrapper)).toEqual([['--is-done']]);
 	});
 
 	it('кнопка редактирования открывает файл задачи на правку', async () => {
@@ -561,7 +570,7 @@ describe('режим дня: свитч выключен (по умолчани�
 		expect(dayCell(wrapper, TODAY).classes()).toContain('--is-focused');
 		// Просроченные первыми, выполненные в этот день - в конце, у каждой свой вид.
 		expect(cardTexts(wrapper)).toEqual(['Долг', 'Сегодня', 'Сделано сегодня']);
-		expect(modifiers(wrapper)).toEqual([['--is-overdue'], [], ['--is-done']]);
+		expect(modifiers(wrapper)).toEqual([['--is-overdue'], ['--is-today'], ['--is-done']]);
 	});
 
 	it('клик по дню показывает его задачи, просроченные видны в любой день', async () => {

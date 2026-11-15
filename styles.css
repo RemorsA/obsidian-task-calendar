@@ -321,6 +321,11 @@
 			border-color: var(--color-red);
 		}
 
+		/* Невыполненная на сегодня - рамкой активного цвета (просьба пользователя 15.11.2026). */
+		&.--is-today {
+			border-color: var(--color-accent);
+		}
+
 		/*
 		 * Закрытая задача - перечёркнутый список целиком. Перечёркивание своё, а
 		 * не от темы: тема рисует его только при включённой настройке чтения, и
@@ -399,6 +404,18 @@
 		height: 48px;
 		border-radius: 50%;
 		background-color: var(--color-accent) !important;
+		/* Плюс всегда белый, при любой теме (просьба пользователя 15.11.2026). */
+		color: #fff;
+
+		/*
+		 * Плюс жирнее (просьба пользователя 15.11.2026): обводка того же цвета
+		 * утолщает линии вдвое, скругления остаются.
+		 */
+		svg path {
+			stroke: currentColor;
+			stroke-width: 64px;
+			stroke-linejoin: round;
+		}
 
 		@media (hover: hover) and (pointer: fine) {
 			&:hover {
